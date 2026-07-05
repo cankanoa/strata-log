@@ -25,6 +25,20 @@ export function AttributeReferenceOptionsDialog({
   const [labels, setLabels] = useState<string[]>([]);
   const [newLabel, setNewLabel] = useState("");
 
+  function normalizedLabels(includeNewLabel = false) {
+    const seen = new Set<string>();
+    return [...labels, ...(includeNewLabel ? [newLabel] : [])]
+      .map((label) => label.trim())
+      .filter((label) => label.length > 0)
+      .filter((label) => {
+        if (seen.has(label)) {
+          return false;
+        }
+        seen.add(label);
+        return true;
+      });
+  }
+
   useEffect(() => {
     if (!open) {
       return;
@@ -42,12 +56,15 @@ export function AttributeReferenceOptionsDialog({
   }
 
   function appendLabel() {
-    setLabels((current) => [...current, newLabel]);
+    if (!newLabel.trim()) {
+      return;
+    }
+    setLabels(normalizedLabels(true));
     setNewLabel("");
   }
 
   async function handleSave() {
-    await onSave(labels.map((label) => label.trim()).filter((label) => label.length > 0));
+    await onSave(normalizedLabels(true));
   }
 
   return (
@@ -80,6 +97,7 @@ export function AttributeReferenceOptionsDialog({
                     <Button
                       variant="ghost"
                       size="icon"
+                      type="button"
                       onClick={() => removeLabel(index)}
                     >
                       <Trash2 className="size-4" />
@@ -99,6 +117,8 @@ export function AttributeReferenceOptionsDialog({
                   <Button
                     variant="ghost"
                     size="icon"
+                    type="button"
+                    disabled={!newLabel.trim()}
                     onClick={appendLabel}
                   >
                     <Plus className="size-4" />
@@ -110,10 +130,10 @@ export function AttributeReferenceOptionsDialog({
 
           <div className="flex justify-end gap-2">
             <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => onOpenChange(false)}>
+              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              <Button onClick={() => void handleSave()}>
+              <Button type="button" onClick={() => void handleSave()}>
                 Save
               </Button>
             </div>

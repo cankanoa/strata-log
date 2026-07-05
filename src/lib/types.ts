@@ -16,6 +16,12 @@ export type FieldChoose = "single" | "select" | "multiselect";
 export type MetadataValue = boolean | number | string | Array<boolean | number | string> | undefined;
 export type SessionMetadata = Record<string, MetadataValue>;
 
+export type SessionPreset = {
+  id: string;
+  name: string;
+  metadata: SessionMetadata;
+};
+
 export type FieldDefinition = {
   id?: string;
   type: FieldType;
@@ -50,6 +56,7 @@ export type TimeLogFile = {
   version: 1;
   fields: Record<string, FieldDefinition>;
   attributeReferenceGroups: AttributeReferenceGroup[];
+  sessionPresets?: SessionPreset[];
   entries: EntryInterval[];
 };
 

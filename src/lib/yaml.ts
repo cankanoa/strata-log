@@ -12,7 +12,7 @@ import {
   serializeFieldOption
 } from "@/lib/metadata";
 import { getAttributeReferenceFieldDefinitions } from "@/lib/attribute-references";
-import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, MetadataValue, TimeInterval, TimeLogFile } from "@/lib/types";
+import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, MetadataValue, SessionMetadata, SessionPreset, TimeInterval, TimeLogFile } from "@/lib/types";
 import { validateFile } from "@/lib/validation";
 
 const EMPTY_DATABASE = `--- csdb
@@ -60,6 +60,17 @@ const SESSION_TABLE: TableSchema = {
   primary_key: { columns: ["id"] }
 };
 
+const SESSION_PRESET_TABLE: TableSchema = {
+  name: "session_presets",
+  columns: {
+    id: "text",
+    name: "text",
+    metadata_json: "text"
+  },
+  required: ["id", "name", "metadata_json"],
+  primary_key: { columns: ["id"] }
+};
+
 const INTERVAL_TABLE: TableSchema = {
   name: "intervals",
   columns: {
@@ -89,6 +100,7 @@ const SCHEMAS: TableSchema[] = [
   FIELD_TABLE,
   ATTRIBUTE_REFERENCE_GROUPS_TABLE,
   SESSION_TABLE,
+  SESSION_PRESET_TABLE,
   INTERVAL_TABLE,
   METADATA_TABLE
 ];
@@ -146,6 +158,17 @@ function parseJsonText(value: unknown): MetadataValue | null | undefined {
     return null;
   }
   return JSON.parse(text) as MetadataValue | null;
+}
+
+function parseMetadataJsonText(value: unknown): SessionMetadata {
+  try {
+    const parsed = JSON.parse(asString(value) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as SessionMetadata
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function groupRowsBy<T extends Row>(rows: T[], key: (row: T) => string): Map<string, T[]> {
@@ -298,16 +321,30 @@ function parseEntries(db: CSDBDatabase, fields: Record<string, FieldDefinition>)
   });
 }
 
+function parseSessionPresets(db: CSDBDatabase): SessionPreset[] {
+  return tableRows(db, "session_presets").map((row) => ({
+    id: asString(row.id),
+    name: asString(row.name),
+    metadata: parseMetadataJsonText(row.metadata_json)
+  }));
+}
+
 export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
   const normalizedFile: TimeLogFile = {
     ...file,
     fields: ensureBuiltinFields(file.fields),
-    attributeReferenceGroups: file.attributeReferenceGroups ?? []
+    attributeReferenceGroups: file.attributeReferenceGroups ?? [],
+    sessionPresets: file.sessionPresets ?? []
   };
 
   const db = createDatabase();
   const fieldRows: Row[] = [];
   const groupRows: Row[] = [];
+  const presetRows: Row[] = normalizedFile.sessionPresets?.map((preset) => ({
+    id: preset.id,
+    name: preset.name,
+    metadata_json: JSON.stringify(preset.metadata ?? {})
+  })) ?? [];
   const sessionRows: Row[] = [];
   const intervalRows: Row[] = [];
   const metadataRows: Row[] = [];
@@ -409,6 +446,7 @@ export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
 
   if (fieldRows.length > 0) db.table("fields").insert(fieldRows);
   if (groupRows.length > 0) db.table("attribute_reference_groups").insert(groupRows);
+  if (presetRows.length > 0) db.table("session_presets").insert(presetRows);
   if (sessionRows.length > 0) db.table("sessions").insert(sessionRows);
   if (intervalRows.length > 0) db.table("intervals").insert(intervalRows);
   if (metadataRows.length > 0) db.table("metadata").insert(metadataRows);
@@ -429,6 +467,7 @@ export function fileFromDatabase(db: CSDBDatabase): { file: TimeLogFile | null; 
     version: 1,
     fields,
     attributeReferenceGroups,
+    sessionPresets: parseSessionPresets(db),
     entries: parseEntries(db, resolvedFields)
   });
 }

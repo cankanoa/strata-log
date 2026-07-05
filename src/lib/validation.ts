@@ -18,7 +18,7 @@ import {
   getResolvedMetadataFields,
   resolveAttributeReferenceMetadata
 } from "@/lib/attribute-references";
-import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, MetadataValue, SessionMetadata, TimeInterval, TimeLogFile } from "@/lib/types";
+import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, MetadataValue, SessionMetadata, SessionPreset, TimeInterval, TimeLogFile } from "@/lib/types";
 
 const fieldTypeSchema = z.enum([
   "uuid",
@@ -69,6 +69,12 @@ const entrySchema: z.ZodType<EntryInterval> = z.object({
   metadata: z.record(metadataValueSchema).optional()
 });
 
+const sessionPresetSchema: z.ZodType<SessionPreset> = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  metadata: z.record(metadataValueSchema)
+});
+
 const timeLogSchema: z.ZodType<TimeLogFile> = z.object({
   version: z.literal(1),
   fields: z.record(fieldDefinitionSchema),
@@ -76,6 +82,7 @@ const timeLogSchema: z.ZodType<TimeLogFile> = z.object({
     label: z.string(),
     fields: z.record(fieldDefinitionSchema)
   })),
+  sessionPresets: z.array(sessionPresetSchema).optional(),
   entries: z.array(entrySchema)
 });
 
@@ -343,7 +350,8 @@ export function validateFile(input: unknown): { file: TimeLogFile | null; errors
 
   const file: TimeLogFile = {
     ...parsed.data,
-    fields: ensureBuiltinFields(parsed.data.fields)
+    fields: ensureBuiltinFields(parsed.data.fields),
+    sessionPresets: parsed.data.sessionPresets ?? []
   };
 
   const errors = [

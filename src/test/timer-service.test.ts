@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptyMetadata } from "@/lib/metadata";
+import { applySessionPreset, getPresetMissingFieldNames } from "@/lib/session-presets";
 import { TimeLogDatabase } from "@/lib/time-log-database";
 import { formatDateTime, parseDate, formatDuration, netDurationMs } from "@/lib/time";
 import { parseTimeLogYaml, serializeTimeLogYaml } from "@/lib/yaml";
@@ -71,6 +72,44 @@ describe("CSDB services", () => {
     expect(parsed.errors).toEqual([]);
     expect(parsed.file?.entries[0]?.metadata).toEqual({ Project: "Strata" });
     expect(parsed.file?.entries[0]?.intervals?.[0]?.metadata).toEqual({});
+  });
+
+  it("round-trips session presets with stale metadata fields", () => {
+    const file: TimeLogFile = {
+      ...baseFile,
+      sessionPresets: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440020",
+          name: "Client Morning",
+          metadata: {
+            Project: "Strata",
+            DeletedLater: "Legacy"
+          }
+        }
+      ]
+    };
+
+    const raw = serializeTimeLogYaml(file);
+    expect(raw).toContain("--- table:session_presets:data");
+    const parsed = parseTimeLogYaml(raw);
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.file?.sessionPresets?.[0]).toEqual(file.sessionPresets?.[0]);
+  });
+
+  it("applies session presets without deleted fields", () => {
+    const preset = {
+      id: "550e8400-e29b-41d4-a716-446655440020",
+      name: "Client Morning",
+      metadata: {
+        Project: "Strata",
+        DeletedLater: "Legacy"
+      }
+    };
+
+    expect(getPresetMissingFieldNames(baseFile, preset)).toEqual(["DeletedLater"]);
+    expect(applySessionPreset(baseFile, preset).DeletedLater).toBeUndefined();
+    expect(applySessionPreset(baseFile, preset).Project).toBe("Strata");
   });
 
   it("rejects invalid select values", () => {
@@ -158,6 +197,42 @@ describe("CSDB services", () => {
     });
 
     expect(added.fields.Billable?.type).toBe("bool");
+  });
+
+  it("creates attribute reference groups when adding a field with options", () => {
+    const added = TimeLogDatabase.addField(baseFile, "Additional", {
+      type: "attribute_reference",
+      choose: "multiselect",
+      options: ["Paid"]
+    });
+
+    expect(added.fields.Additional?.options).toEqual(["Paid"]);
+    expect(added.attributeReferenceGroups.map((group) => group.label)).toEqual(["Paid"]);
+  });
+
+  it("adds another attribute reference option to a multiselect field", () => {
+    const file: TimeLogFile = {
+      ...baseFile,
+      fields: {
+        ...baseFile.fields,
+        Additional: {
+          type: "attribute_reference",
+          choose: "multiselect",
+          options: ["Paid"]
+        }
+      },
+      attributeReferenceGroups: [
+        {
+          label: "Paid",
+          fields: {}
+        }
+      ]
+    };
+
+    const updated = TimeLogDatabase.setAttributeReferenceGroupsForField(file, "Additional", ["Paid", "Unpaid"]);
+
+    expect(updated.fields.Additional?.options).toEqual(["Paid", "Unpaid"]);
+    expect(updated.attributeReferenceGroups.map((group) => group.label)).toEqual(["Paid", "Unpaid"]);
   });
 
   it("converts existing values when choose changes to multiselect", () => {

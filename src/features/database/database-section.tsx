@@ -416,31 +416,15 @@ export function DatabaseSection() {
       showDatabaseError("Column already exists", `A column named "${name}" already exists.`);
       return false;
     }
-    const attributeReferenceLabels =
-      field.type === "attribute_reference" ? getFieldOptions(field).map((option) => option.value) : [];
-    const fieldToCreate =
-      field.type === "attribute_reference"
-        ? {
-            ...field,
-            options: undefined,
-          }
-        : field;
-    const nextFile = TimeLogDatabase.addField(file, name, fieldToCreate);
+    const nextFile = TimeLogDatabase.addField(file, name, field);
     const missingCount = field.required ? TimeLogDatabase.countMissingFieldValues(nextFile, name) : 0;
     const saved = await addField(name, {
-      ...fieldToCreate,
+      ...field,
       required: Boolean(field.required) && missingCount === 0
     });
     if (!saved) {
       showDatabaseError("Couldn't add column", `The column "${name}" could not be created.`);
       return false;
-    }
-    if (saved && field.type === "attribute_reference" && attributeReferenceLabels.length > 0) {
-      const linked = await updateFieldAttributeReferences(name, attributeReferenceLabels);
-      if (!linked) {
-        showDatabaseError("Couldn't link attribute references", `The references for "${name}" could not be saved.`);
-        return false;
-      }
     }
     if (saved && field.required && missingCount > 0) {
       openValueDialog({
@@ -462,20 +446,16 @@ export function DatabaseSection() {
 
   function openAttributeReferenceFieldEditor(
     name: string,
-    field: FieldDefinition,
-    choose: NonNullable<FieldDefinition["choose"]> = getFieldChoose(field)
+    field: FieldDefinition
   ) {
     openAttributeReferenceOptionsDialog({
       title: `Attribute References for ${name}`,
       description: "Enter the attribute reference group names this field should offer in Track. Existing names are reused, new ones are created automatically.",
-      initialLabels: getFieldOptionsWithAttributeReferences(field, file).map((option) => option.display ?? option.value),
+      initialLabels: getFieldOptionsWithAttributeReferences(field, file).map((option) => option.value),
       onSave: async (labels) => {
         const savedReferences = await updateFieldAttributeReferences(name, labels);
         if (savedReferences) {
-          const savedField = await updateField(name, { ...field, choose });
-          if (savedField) {
-            setAttributeReferenceOptionsDialog(null);
-          }
+          setAttributeReferenceOptionsDialog(null);
         }
       }
     });
@@ -488,7 +468,7 @@ export function DatabaseSection() {
     openAttributeReferenceOptionsDialog({
       title: "Attribute References",
       description: "Enter the attribute reference group names this field should offer in Track. Existing names are reused, new ones are created automatically.",
-      initialLabels: (field.options ?? []).map((option) => parseFieldOption(option).display ?? parseFieldOption(option).value),
+      initialLabels: (field.options ?? []).map((option) => parseFieldOption(option).value),
       onSave: async (labels) => {
         setOptions(
           labels.map((label) =>

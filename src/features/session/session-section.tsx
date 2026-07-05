@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle
 } from "@/components/ui/dialog";
+import { SessionPresetsMenu } from "@/features/session/session-presets-menu";
 import { EntryForm } from "@/features/timer/entry-form";
 import { emptyMetadata } from "@/lib/metadata";
 import { formatDurationWithSeconds, getRunningEntry, netDurationMs } from "@/lib/time";
@@ -21,22 +22,35 @@ export function SessionSection() {
   const navigate = useNavigate();
   const {
     file,
+    fileHandle,
     trackDraftMetadata,
     setTrackDraftMetadata,
     addManualEntry,
+    updateSessionPresets,
     startLiveEntry,
     startLiveEntryAt,
     stopLiveEntry
   } = useAppStore(useShallow((state) => ({
     file: state.file,
+    fileHandle: state.fileHandle,
     trackDraftMetadata: state.trackDraftMetadata,
     setTrackDraftMetadata: state.setTrackDraftMetadata,
     addManualEntry: state.addManualEntry,
+    updateSessionPresets: state.updateSessionPresets,
     startLiveEntry: state.startLiveEntry,
     startLiveEntryAt: state.startLiveEntryAt,
     stopLiveEntry: state.stopLiveEntry
   })));
   const runningEntry = getRunningEntry(file?.entries ?? []);
+  const metadataResetKey = file ? JSON.stringify([fileHandle?.path ?? "", file.fields, file.attributeReferenceGroups]) : "";
+  const runningResetKey = runningEntry
+    ? JSON.stringify([
+        runningEntry.id,
+        runningEntry.intervalMetadata,
+        runningEntry.metadata ?? {},
+        runningEntry.intervals?.at(-1)?.metadata ?? {}
+      ])
+    : "";
   const [startAtValue, setStartAtValue] = useState<string>();
   const [isStartAtOpen, setIsStartAtOpen] = useState(false);
   const [isManualOpen, setIsManualOpen] = useState(false);
@@ -70,7 +84,7 @@ export function SessionSection() {
       return;
     }
     setTrackDraftMetadata({});
-  }, [file, runningEntry, setTrackDraftMetadata]);
+  }, [metadataResetKey, runningResetKey, setTrackDraftMetadata]);
 
   async function handleStartNow() {
     return startLiveEntry(trackDraftMetadata);
@@ -100,6 +114,13 @@ export function SessionSection() {
         <CardHeader className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <CardTitle>Session</CardTitle>
           <div className="flex flex-wrap gap-2">
+            <SessionPresetsMenu
+              file={file}
+              disabled={!file || Boolean(runningEntry)}
+              currentMetadata={trackDraftMetadata}
+              onApply={setTrackDraftMetadata}
+              onSave={updateSessionPresets}
+            />
             <Button variant="secondary" onClick={() => setIsStartAtOpen(true)} disabled={!file || Boolean(runningEntry)}>
               Start At
             </Button>

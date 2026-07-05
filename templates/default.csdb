@@ -6,6 +6,7 @@ tables:
   - fields
   - attribute_reference_groups
   - sessions
+  - session_presets
   - intervals
   - metadata
 
@@ -75,6 +76,22 @@ primary_key:
 
 --- table:sessions:data
 id,type,interval_metadata
+
+--- table:session_presets:schema
+name: session_presets
+columns:
+  id: text
+  name: text
+  metadata_json: text
+required:
+  - id
+  - name
+  - metadata_json
+primary_key:
+  columns: [id]
+
+--- table:session_presets:data
+id,name,metadata_json
 
 --- table:intervals:schema
 name: intervals

@@ -12,7 +12,8 @@ import {
   serializeFieldOption
 } from "@/lib/metadata";
 import { getResolvedMetadataFields } from "@/lib/attribute-references";
-import type { EntryInterval, FieldDefinition, MetadataValue, SessionMetadata, TimeLogFile } from "@/lib/types";
+import { normalizeSessionPresets } from "@/lib/session-presets";
+import type { EntryInterval, FieldDefinition, MetadataValue, SessionMetadata, SessionPreset, TimeLogFile } from "@/lib/types";
 import { buildDatabaseFromFile, fileFromDatabase } from "@/lib/yaml";
 
 function rows(db: CSDBDatabase, tableName: string): Row[] {
@@ -93,6 +94,9 @@ function insertFieldDefinitionRows(db: CSDBDatabase, name: string, rawField: Fie
   const field = normalizeFieldDefinition(rawField);
   const existingRow = rawField.id ? db.table("fields").byPrimaryKey(rawField.id) : findFieldRow(db, name, groupLabel);
   const fieldId = String(existingRow?.id ?? rawField.id ?? uuidv4());
+  if (!groupLabel && field.type === "attribute_reference") {
+    getFieldOptions(field).forEach((option) => ensureAttributeReferenceGroupRow(db, option.value));
+  }
 
   if (existingRow) {
     db.table("fields").where({ id: fieldId }).update({
@@ -476,6 +480,13 @@ export const TimeLogDatabase = {
     return mutateFile(file, (db) => {
       deleteEntryRows(db, entryId);
     });
+  },
+
+  setSessionPresets(file: TimeLogFile, presets: SessionPreset[]): TimeLogFile {
+    return {
+      ...file,
+      sessionPresets: normalizeSessionPresets(presets)
+    };
   },
 
   startLiveEntry(file: TimeLogFile, metadata: SessionMetadata, now: string, intervalMetadata = false): TimeLogFile {

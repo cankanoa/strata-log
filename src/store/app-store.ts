@@ -12,6 +12,7 @@ import type {
   FieldDefinition,
   FileHandleInfo,
   MetadataFilter,
+  SessionPreset,
   SessionMetadata,
   TimeLogFile
 } from "@/lib/types";
@@ -40,6 +41,7 @@ type StoreState = AppSnapshot & {
   focusCompletedAt: number | null;
   selectedTaskPath: string;
   watchCleanup: (() => void) | null;
+  recentSaveRaws: Array<{ raw: string; savedAt: number }>;
   clearErrors: () => void;
   openFile: () => Promise<void>;
   unloadFile: () => void;
@@ -63,6 +65,7 @@ type StoreState = AppSnapshot & {
   addManualEntry: (entry: Omit<EntryInterval, "id">) => Promise<boolean>;
   updateEntry: (entryId: string, entry: EntryInterval) => Promise<boolean>;
   deleteEntry: (entryId: string) => Promise<void>;
+  updateSessionPresets: (presets: SessionPreset[]) => Promise<boolean>;
   startLiveEntry: (metadata: SessionMetadata) => Promise<boolean>;
   startLiveEntryAt: (metadata: SessionMetadata, start: string) => Promise<boolean>;
   stopLiveEntry: () => Promise<void>;
@@ -88,6 +91,14 @@ async function watchHandle(handle: FileHandleInfo, set: (partial: Partial<StoreS
     const current = get();
     if (!current.fileHandle || current.fileHandle.path !== handle.path) {
       return;
+    }
+    const recentSaveRaws = current.recentSaveRaws.filter((saved) => Date.now() - saved.savedAt < 10_000);
+    if (recentSaveRaws.some((saved) => saved.raw === raw)) {
+      set({ recentSaveRaws });
+      return;
+    }
+    if (recentSaveRaws.length !== current.recentSaveRaws.length) {
+      set({ recentSaveRaws });
     }
     const parsed = parseTimeLogYaml(raw);
     if (!parsed.file || parsed.errors.length > 0) {
@@ -156,6 +167,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
   focusCompletedAt: null,
   selectedTaskPath: "",
   watchCleanup: null,
+  recentSaveRaws: [],
 
   clearErrors() {
     set({ errors: [] });
@@ -192,7 +204,8 @@ export const useAppStore = create<StoreState>((set, get) => ({
       trackDraftMetadata: applyResolvedMetadataDefaults(parsed, normalizeMetadata(getResolvedMetadataFields(parsed), get().trackDraftMetadata)),
       errors: [],
       hasUnsavedChanges: false,
-      conflict: ConflictService.clean()
+      conflict: ConflictService.clean(),
+      recentSaveRaws: []
     });
     await watchHandle(response.handle, set, get);
   },
@@ -208,7 +221,8 @@ export const useAppStore = create<StoreState>((set, get) => ({
       trackDraftMetadata: {},
       selectedEntryId: null,
       filters: [],
-      watchCleanup: null
+      watchCleanup: null,
+      recentSaveRaws: []
     });
   },
 
@@ -230,7 +244,8 @@ export const useAppStore = create<StoreState>((set, get) => ({
       trackDraftMetadata: applyResolvedMetadataDefaults(template.content, normalizeMetadata(getResolvedMetadataFields(template.content), {})),
       errors: [],
       hasUnsavedChanges: false,
-      conflict: ConflictService.clean()
+      conflict: ConflictService.clean(),
+      recentSaveRaws: []
     });
     await watchHandle(response.handle, set, get);
   },
@@ -250,7 +265,9 @@ export const useAppStore = create<StoreState>((set, get) => ({
       set({ errors: validation.errors });
       return;
     }
-    await getPlatformApi().saveFile(state.fileHandle.path, serializeTimeLogYaml(state.file));
+    const raw = serializeTimeLogYaml(state.file);
+    set({ recentSaveRaws: [...state.recentSaveRaws, { raw, savedAt: Date.now() }].slice(-10) });
+    await getPlatformApi().saveFile(state.fileHandle.path, raw);
     set({ hasUnsavedChanges: false, errors: [] });
   },
 
@@ -419,6 +436,23 @@ export const useAppStore = create<StoreState>((set, get) => ({
       hasUnsavedChanges: true
     });
     await get().saveCurrentFile();
+  },
+
+  async updateSessionPresets(presets) {
+    const current = get().file;
+    if (!current) {
+      set({ errors: ["Open a file before editing presets."] });
+      return false;
+    }
+    const next = TimeLogDatabase.setSessionPresets(current, presets);
+    const validation = validateFile(next);
+    if (!validation.file) {
+      set({ errors: validation.errors });
+      return false;
+    }
+    set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+    await get().saveCurrentFile();
+    return true;
   },
 
   async startLiveEntry(metadata) {
