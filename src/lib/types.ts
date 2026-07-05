@@ -7,11 +7,10 @@ export type FieldType =
   | "datetime"
   | "bool"
   | "int"
-  | "float"
-  | "select"
-  | "multiselect";
+  | "float";
 
-export type FieldChoose = "single" | "select" | "multiselect";
+export type FieldSelection = "single" | "select" | "multiselect";
+export type FieldVisibility = "editable" | "viewable" | "hidden" | "addable";
 
 export type MetadataValue = boolean | number | string | Array<boolean | number | string> | undefined;
 export type SessionMetadata = Record<string, MetadataValue>;
@@ -25,10 +24,10 @@ export type SessionPreset = {
 export type FieldDefinition = {
   id?: string;
   type: FieldType;
-  choose?: FieldChoose;
+  selection?: FieldSelection;
   options?: string[];
   required?: boolean;
-  editable?: boolean;
+  visibility: FieldVisibility;
   default?: MetadataValue | null;
 };
 
@@ -56,7 +55,7 @@ export type TimeLogFile = {
   version: 1;
   fields: Record<string, FieldDefinition>;
   attributeReferenceGroups: AttributeReferenceGroup[];
-  sessionPresets?: SessionPreset[];
+  sessionPresets: SessionPreset[];
   entries: EntryInterval[];
 };
 

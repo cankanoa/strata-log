@@ -50,7 +50,7 @@ function createOptionDraft(field: FieldDefinition, raw = ""): OptionDraft {
     value: parseMetadataValueForField(
       {
         ...field,
-        choose: "single"
+        selection: "single"
       },
       parsed.value
     )
@@ -193,8 +193,6 @@ function TypeOptionEditor({
       return <DateTimeOptionEditor option={option} onChange={onChange} />;
     case "attribute_reference":
     case "string":
-    case "select":
-    case "multiselect":
     default:
       return <StringOptionEditor option={option} onChange={onChange} />;
   }
@@ -245,7 +243,7 @@ export function FieldOptionsDialog({
   const [newOption, setNewOption] = useState<OptionDraft>(createOptionDraft(field));
   const singleValueField: FieldDefinition = {
     ...field,
-    choose: "single"
+    selection: "single"
   };
 
   useEffect(() => {

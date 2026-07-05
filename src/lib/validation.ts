@@ -3,7 +3,8 @@ import { validate as isUuid } from "uuid";
 import {
   ensureBuiltinFields,
   getFieldDefaultValue,
-  getFieldChoose,
+  getFieldSelection,
+  normalizeFieldVisibility,
   getFieldOptions,
   getSessionMetadataFields,
   getMetadataFields,
@@ -29,12 +30,11 @@ const fieldTypeSchema = z.enum([
   "datetime",
   "bool",
   "int",
-  "float",
-  "select",
-  "multiselect"
+  "float"
 ]);
 
-const fieldChooseSchema = z.enum(["single", "select", "multiselect"]).optional();
+const fieldSelectionSchema = z.enum(["single", "select", "multiselect"]).optional();
+const fieldVisibilitySchema = z.enum(["editable", "viewable", "hidden", "addable"]);
 
 const metadataValueSchema = z.union([
   z.boolean(),
@@ -47,10 +47,10 @@ const metadataValueSchema = z.union([
 const fieldDefinitionSchema: z.ZodType<FieldDefinition> = z.object({
   id: z.string().uuid().optional(),
   type: fieldTypeSchema,
-  choose: fieldChooseSchema,
+  selection: fieldSelectionSchema,
   options: z.array(z.string().min(1)).optional(),
   required: z.boolean().optional(),
-  editable: z.boolean().optional(),
+  visibility: fieldVisibilitySchema,
   default: metadataValueSchema.nullable().optional()
 });
 
@@ -82,7 +82,7 @@ const timeLogSchema: z.ZodType<TimeLogFile> = z.object({
     label: z.string(),
     fields: z.record(fieldDefinitionSchema)
   })),
-  sessionPresets: z.array(sessionPresetSchema).optional(),
+  sessionPresets: z.array(sessionPresetSchema),
   entries: z.array(entrySchema)
 });
 
@@ -91,8 +91,8 @@ function validateFieldValue(name: string, field: FieldDefinition, value: Metadat
     return null;
   }
 
-  const choose = getFieldChoose(field);
-  if (choose === "select") {
+  const selection = getFieldSelection(field);
+  if (selection === "select") {
     const options = getFieldOptions(field);
     if (options.length === 0) {
       return null;
@@ -101,7 +101,7 @@ function validateFieldValue(name: string, field: FieldDefinition, value: Metadat
       ? null
       : `"${value}" is not a valid option for "${name}".`;
   }
-  if (choose === "multiselect") {
+  if (selection === "multiselect") {
     if (!Array.isArray(value)) {
       return `"${name}" must be a list of options.`;
     }
@@ -157,16 +157,18 @@ export function validateFieldDefinitions(fields: Record<string, FieldDefinition>
       errors.push(`Field "${key}" is invalid.`);
       return;
     }
-    if ((field.type === "select" || field.type === "multiselect") && !field.choose) {
-      errors.push(`Field "${key}" must define "choose" when using legacy select types.`);
+    if (field.type === "bool" && getFieldSelection(field) !== "single") {
+      errors.push(`Field "${key}" must use single selection value.`);
     }
-    if (field.type === "bool" && getFieldChoose(field) !== "single") {
-      errors.push(`Field "${key}" must use single choose mode.`);
+    if (field.type === "attribute_reference" && !["select", "multiselect"].includes(getFieldSelection(field))) {
+      errors.push(`Field "${key}" must use select or multiselect selection value.`);
     }
-    if (field.type === "attribute_reference" && !["select", "multiselect"].includes(getFieldChoose(field))) {
-      errors.push(`Field "${key}" must use select or multiselect choose mode.`);
-    }
-    if (!isBuiltinField(key) && field.editable === false && !hasMetadataValue(getFieldDefaultValue(field))) {
+    if (
+      !isBuiltinField(key) &&
+      field.required &&
+      !["editable", "addable"].includes(normalizeFieldVisibility(field)) &&
+      !hasMetadataValue(getFieldDefaultValue(field))
+    ) {
       errors.push(`Field "${key}" is not editable and must define a default value.`);
     }
     if (field.default !== undefined && field.default !== null) {
@@ -190,8 +192,8 @@ export function validateFieldDefinitions(fields: Record<string, FieldDefinition>
     if (nextFields[key]?.type !== type) {
       errors.push(`Field "${key}" must be type "${type}".`);
     }
-    if (getFieldChoose(nextFields[key]) !== "single") {
-      errors.push(`Field "${key}" must use single choose mode.`);
+    if (getFieldSelection(nextFields[key]) !== "single") {
+      errors.push(`Field "${key}" must use single selection value.`);
     }
   });
 
@@ -232,11 +234,11 @@ function validateAttributeReferenceGroups(
         errors.push(`Attribute reference field "${group.label}.${key}" is invalid.`);
         return;
       }
-      if (field.type === "bool" && getFieldChoose(field) !== "single") {
-        errors.push(`Attribute reference field "${group.label}.${key}" must use single choose mode.`);
+      if (field.type === "bool" && getFieldSelection(field) !== "single") {
+        errors.push(`Attribute reference field "${group.label}.${key}" must use single selection value.`);
       }
-      if (field.type === "attribute_reference" && !["select", "multiselect"].includes(getFieldChoose(field))) {
-        errors.push(`Attribute reference field "${group.label}.${key}" must use select or multiselect choose mode.`);
+      if (field.type === "attribute_reference" && !["select", "multiselect"].includes(getFieldSelection(field))) {
+        errors.push(`Attribute reference field "${group.label}.${key}" must use select or multiselect selection value.`);
       }
       if (field.default !== undefined && field.default !== null) {
         const defaultError = validateFieldValue(`${group.label}.${key} default`, field, field.default);
@@ -247,7 +249,11 @@ function validateAttributeReferenceGroups(
       if (field.type === "attribute_reference") {
         errors.push(`Attribute reference field "${group.label}.${key}" cannot itself be type "attribute_reference".`);
       }
-      if (field.editable === false && !hasMetadataValue(getFieldDefaultValue(field))) {
+      if (
+        field.required &&
+        !["editable", "addable"].includes(normalizeFieldVisibility(field)) &&
+        !hasMetadataValue(getFieldDefaultValue(field))
+      ) {
         errors.push(`Attribute reference field "${group.label}.${key}" is not editable and must define a value.`);
       }
       const existing = byFieldName.get(key);
@@ -281,7 +287,7 @@ export function validateMetadataPayload(
     }
     if (field.type === "attribute_reference") {
       const options = getFieldOptionsWithAttributeReferences(field, file);
-      const values = getFieldChoose(field) === "multiselect"
+      const values = getFieldSelection(field) === "multiselect"
         ? (Array.isArray(value) ? value : [])
         : [value];
       return values.every((item) => typeof item === "string" && options.some((option) => option.value === item))
@@ -350,8 +356,7 @@ export function validateFile(input: unknown): { file: TimeLogFile | null; errors
 
   const file: TimeLogFile = {
     ...parsed.data,
-    fields: ensureBuiltinFields(parsed.data.fields),
-    sessionPresets: parsed.data.sessionPresets ?? []
+    fields: ensureBuiltinFields(parsed.data.fields)
   };
 
   const errors = [

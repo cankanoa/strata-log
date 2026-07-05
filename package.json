@@ -84,7 +84,19 @@
       "dist/**/*",
       "dist-electron/**/*",
       "templates/**/*",
+      "databases.csdb",
+      "data/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "databases.csdb",
+        "to": "databases.csdb"
+      },
+      {
+        "from": "data",
+        "to": "data"
+      }
     ],
     "directories": {
       "buildResources": "build"

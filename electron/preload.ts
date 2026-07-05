@@ -4,6 +4,22 @@ contextBridge.exposeInMainWorld("strata", {
   openFile: () => ipcRenderer.invoke("file:open"),
   createFileFromTemplate: (suggestedName: string, raw: string) =>
     ipcRenderer.invoke("file:create-from-template", suggestedName, raw),
+  readDatabaseRegistry: () => ipcRenderer.invoke("database-registry:read"),
+  saveDatabaseRegistry: (raw: string) => ipcRenderer.invoke("database-registry:save", raw),
+  chooseDatabaseUrl: (suggestedName: string) => ipcRenderer.invoke("database-file:choose-url", suggestedName),
+  getDatabaseFileInfo: (payload: { location: "Internal" | "Path"; url: string }) =>
+    ipcRenderer.invoke("database-file:info", payload),
+  loadDatabaseFile: (payload: { location: "Internal" | "Path"; url: string }) =>
+    ipcRenderer.invoke("database-file:load", payload),
+  importDatabaseFile: () => ipcRenderer.invoke("database-file:import"),
+  referenceDatabaseFile: () => ipcRenderer.invoke("database-file:reference"),
+  exportDatabaseFile: (payload: { url: string }) => ipcRenderer.invoke("database-file:export", payload),
+  renameDatabaseFile: (payload: { location: "Internal" | "Path"; url: string; name: string }) =>
+    ipcRenderer.invoke("database-file:rename", payload),
+  createDatabaseFile: (payload: { location: "Internal" | "Path"; url: string; raw: string }) =>
+    ipcRenderer.invoke("database-file:create", payload),
+  deleteDatabaseFile: (payload: { location: "Internal" | "Path"; url: string }) =>
+    ipcRenderer.invoke("database-file:delete", payload),
   choosePath: () => ipcRenderer.invoke("path:choose"),
   listMarkdownFiles: (pattern: string, baseDir?: string) => ipcRenderer.invoke("path:list-markdown-files", pattern, baseDir),
   readTextFile: (path: string) => ipcRenderer.invoke("file:read", path),

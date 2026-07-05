@@ -11,15 +11,16 @@ import { TimerService } from "@/services/timer-service";
 const baseFile: TimeLogFile = {
   version: 1,
   fields: {
-    id: { type: "uuid", choose: "single" },
-    type: { type: "string", choose: "single" },
-    start_time: { type: "datetime", choose: "single" },
-    end_time: { type: "datetime", choose: "single" },
-    session_id: { type: "uuid", choose: "single" },
-    Project: { type: "string", choose: "single" },
-    Job: { type: "string", choose: "select", options: ["Client Work", "Internal"] }
+    id: { type: "uuid", selection: "single", visibility: "viewable" },
+    type: { type: "string", selection: "single", visibility: "viewable" },
+    start_time: { type: "datetime", selection: "single", visibility: "viewable" },
+    end_time: { type: "datetime", selection: "single", visibility: "viewable" },
+    session_id: { type: "uuid", selection: "single", visibility: "viewable" },
+    Project: { type: "string", selection: "single", visibility: "editable" },
+    Job: { type: "string", selection: "select", visibility: "editable", options: ["Client Work", "Internal"] }
   },
   attributeReferenceGroups: [],
+  sessionPresets: [],
   entries: []
 };
 
@@ -137,7 +138,7 @@ describe("CSDB services", () => {
     expect(result.errors[0]).toContain("not a valid option");
   });
 
-  it("renames a metadata column across the file", () => {
+  it("renames a metadata name across the file", () => {
     const file: TimeLogFile = {
       ...baseFile,
       entries: [
@@ -164,7 +165,7 @@ describe("CSDB services", () => {
     expect(renamed.entries[0]?.metadata?.Client).toBe("Strata");
   });
 
-  it("deletes a metadata column across the file", () => {
+  it("deletes a metadata name across the file", () => {
     const file: TimeLogFile = {
       ...baseFile,
       entries: [
@@ -190,10 +191,11 @@ describe("CSDB services", () => {
     expect(deleted.entries[0]?.intervals?.[0]?.metadata?.Job).toBeUndefined();
   });
 
-  it("adds a metadata column to the file definition", () => {
+  it("adds a metadata name to the file definition", () => {
     const added = TimeLogDatabase.addField(baseFile, "Billable", {
       type: "bool",
-      choose: "single"
+      selection: "single",
+      visibility: "editable"
     });
 
     expect(added.fields.Billable?.type).toBe("bool");
@@ -202,12 +204,39 @@ describe("CSDB services", () => {
   it("creates attribute reference groups when adding a field with options", () => {
     const added = TimeLogDatabase.addField(baseFile, "Additional", {
       type: "attribute_reference",
-      choose: "multiselect",
+      selection: "multiselect",
+      visibility: "editable",
       options: ["Paid"]
     });
 
     expect(added.fields.Additional?.options).toEqual(["Paid"]);
     expect(added.attributeReferenceGroups.map((group) => group.label)).toEqual(["Paid"]);
+  });
+
+  it("round-trips field visibility", () => {
+    const file: TimeLogFile = {
+      ...baseFile,
+      fields: {
+        ...baseFile.fields,
+        HiddenNote: {
+          type: "string",
+          selection: "single",
+          visibility: "hidden"
+        },
+        AddableJob: {
+          type: "string",
+          selection: "select",
+          visibility: "addable",
+          options: ["Client Work"]
+        }
+      }
+    };
+
+    const parsed = parseTimeLogYaml(serializeTimeLogYaml(file));
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.file?.fields.HiddenNote?.visibility).toBe("hidden");
+    expect(parsed.file?.fields.AddableJob?.visibility).toBe("addable");
   });
 
   it("adds another attribute reference option to a multiselect field", () => {
@@ -217,7 +246,8 @@ describe("CSDB services", () => {
         ...baseFile.fields,
         Additional: {
           type: "attribute_reference",
-          choose: "multiselect",
+          selection: "multiselect",
+          visibility: "editable",
           options: ["Paid"]
         }
       },
@@ -235,12 +265,12 @@ describe("CSDB services", () => {
     expect(updated.attributeReferenceGroups.map((group) => group.label)).toEqual(["Paid", "Unpaid"]);
   });
 
-  it("converts existing values when choose changes to multiselect", () => {
+  it("converts existing values when selection changes to multiselect", () => {
     const file: TimeLogFile = {
       ...baseFile,
       fields: {
         ...baseFile.fields,
-        Project: { type: "string", choose: "single", default: "Strata" }
+        Project: { type: "string", selection: "single", visibility: "editable", default: "Strata" }
       },
       entries: [
         {
@@ -262,19 +292,19 @@ describe("CSDB services", () => {
 
     const updated = TimeLogDatabase.updateField(file, "Project", {
       ...file.fields.Project,
-      choose: "multiselect"
+      selection: "multiselect"
     });
 
     expect(updated.fields.Project?.default).toEqual(["Strata"]);
     expect(updated.entries[0]?.metadata?.Project).toEqual(["Strata"]);
   });
 
-  it("derives select options from existing values when choose changes from single", () => {
+  it("derives select options from existing values when selection changes from single", () => {
     const file: TimeLogFile = {
       ...baseFile,
       fields: {
         ...baseFile.fields,
-        Project: { type: "string", choose: "single", default: "Strata" }
+        Project: { type: "string", selection: "single", visibility: "editable", default: "Strata" }
       },
       entries: [
         {
@@ -296,19 +326,19 @@ describe("CSDB services", () => {
 
     const updated = TimeLogDatabase.updateField(file, "Project", {
       ...file.fields.Project,
-      choose: "select"
+      selection: "select"
     });
 
     expect(updated.fields.Project?.options).toEqual(["Strata", "Client Alpha"]);
     expect(updated.entries[0]?.metadata?.Project).toBe("Client Alpha");
   });
 
-  it("converts interval values when choose changes back to single", () => {
+  it("converts interval values when selection changes back to single", () => {
     const file: TimeLogFile = {
       ...baseFile,
       fields: {
         ...baseFile.fields,
-        Job: { type: "string", choose: "multiselect", options: ["Client Work", "Internal"] }
+        Job: { type: "string", selection: "multiselect", visibility: "editable", options: ["Client Work", "Internal"] }
       },
       entries: [
         {
@@ -330,7 +360,7 @@ describe("CSDB services", () => {
 
     const updated = TimeLogDatabase.updateField(file, "Job", {
       ...file.fields.Job,
-      choose: "single",
+      selection: "single",
       options: undefined
     });
 
@@ -343,7 +373,7 @@ describe("CSDB services", () => {
 
   it("uses default metadata values in empty drafts", () => {
     const draft = emptyMetadata({
-      Project: { type: "string", default: "Strata" }
+      Project: { type: "string", visibility: "editable", default: "Strata" }
     });
 
     expect(draft.Project).toBe("Strata");
@@ -354,7 +384,7 @@ describe("CSDB services", () => {
       ...baseFile,
       fields: {
         ...baseFile.fields,
-        Project: { type: "string", required: true }
+        Project: { type: "string", visibility: "editable", required: true }
       },
       entries: [
         {

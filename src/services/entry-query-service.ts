@@ -30,7 +30,7 @@ export const EntryQueryService = {
     return entries.filter((entry) =>
       filters.every((filter) => {
         const metadata = resolveEntryMetadata(
-          fields ? { version: 1, fields, attributeReferenceGroups: [], entries: [] } : undefined,
+          fields ? { version: 1, fields, attributeReferenceGroups: [], sessionPresets: [], entries: [] } : undefined,
           entry
         );
         const value =
@@ -52,7 +52,7 @@ export const EntryQueryService = {
 
   resolveSortValue(entry: EntryInterval, key: string, fields?: Record<string, FieldDefinition>): string | number {
     const metadata = resolveEntryMetadata(
-      fields ? { version: 1, fields, attributeReferenceGroups: [], entries: [] } : undefined,
+      fields ? { version: 1, fields, attributeReferenceGroups: [], sessionPresets: [], entries: [] } : undefined,
       entry
     );
     const bounds = getSessionBounds(entry);

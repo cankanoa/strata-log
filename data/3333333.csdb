@@ -1,7 +1,7 @@
 --- csdb
 format: CSDB
 version: 1
-name: strata-log-default
+name: strata-log
 tables:
   - fields
   - attribute_reference_groups
@@ -32,20 +32,28 @@ required:
   - visibility
   - scope
 primary_key:
-  columns: [id]
+  columns:
+    - id
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
 
 --- table:fields:data
 id,name,type,selection,required,visibility,options_json,default_json,scope,attribute_reference_group_label
-00000000-0000-4000-8000-000000000001,id,uuid,single,false,viewable,[],null,regular,
-00000000-0000-4000-8000-000000000002,type,string,single,false,viewable,[],null,regular,
-00000000-0000-4000-8000-000000000003,start_time,datetime,single,false,viewable,[],null,regular,
-00000000-0000-4000-8000-000000000004,end_time,datetime,single,false,viewable,[],null,regular,
-00000000-0000-4000-8000-000000000005,session_id,uuid,single,false,viewable,[],null,regular,
-00000000-0000-4000-8000-000000000006,interval_metadata,bool,single,false,viewable,[],false,regular,
-00000000-0000-4000-8000-000000000007,Project,string,single,false,editable,[],null,regular,
-00000000-0000-4000-8000-000000000008,Hourly Pay,string,single,false,editable,[],null,regular,
-00000000-0000-4000-8000-000000000009,Job,string,select,false,editable,"[""Client Work"",""Internal"",""Admin""]",null,regular,
-00000000-0000-4000-8000-00000000000a,Activity,string,single,false,editable,[],null,regular,
+00000000-0000-4000-8000-000000000001,id,uuid,single,false,viewable,[],null,regular,""
+00000000-0000-4000-8000-000000000002,type,string,single,false,viewable,[],null,regular,""
+00000000-0000-4000-8000-000000000003,start_time,datetime,single,false,viewable,[],null,regular,""
+00000000-0000-4000-8000-000000000004,end_time,datetime,single,false,viewable,[],null,regular,""
+00000000-0000-4000-8000-000000000005,session_id,uuid,single,false,viewable,[],null,regular,""
+00000000-0000-4000-8000-000000000006,interval_metadata,bool,single,false,viewable,[],false,regular,""
+00000000-0000-4000-8000-000000000007,Project,string,single,false,editable,[],null,regular,""
+00000000-0000-4000-8000-000000000008,Hourly Pay,string,single,false,editable,[],null,regular,""
+00000000-0000-4000-8000-000000000009,Job,string,select,false,editable,"[""Client Work"",""Internal"",""Admin""]",null,regular,""
+00000000-0000-4000-8000-00000000000a,Activity,string,single,false,editable,[],null,regular,""
 
 --- table:attribute_reference_groups:schema
 name: attribute_reference_groups
@@ -54,7 +62,15 @@ columns:
 required:
   - label
 primary_key:
-  columns: [label]
+  columns:
+    - label
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
 
 --- table:attribute_reference_groups:data
 label
@@ -70,7 +86,15 @@ required:
   - type
   - interval_metadata
 primary_key:
-  columns: [id]
+  columns:
+    - id
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
 
 --- table:sessions:data
 id,type,interval_metadata
@@ -86,7 +110,15 @@ required:
   - name
   - metadata_json
 primary_key:
-  columns: [id]
+  columns:
+    - id
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
 
 --- table:session_presets:data
 id,name,metadata_json
@@ -103,7 +135,15 @@ required:
   - session_id
   - start_time
 primary_key:
-  columns: [id]
+  columns:
+    - id
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
 
 --- table:intervals:data
 id,session_id,start_time,end_time
@@ -121,7 +161,16 @@ required:
   - field_name
   - value_text
 primary_key:
-  columns: [id]
+  columns:
+    - id
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
 
 --- table:metadata:data
 id,session_id,interval_id,field_name,value_text
+

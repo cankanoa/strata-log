@@ -1,7 +1,7 @@
 --- csdb
 format: CSDB
 version: 1
-name: strata-log-default
+name: strata-log-research-notes
 tables:
   - fields
   - attribute_reference_groups
@@ -42,10 +42,11 @@ id,name,type,selection,required,visibility,options_json,default_json,scope,attri
 00000000-0000-4000-8000-000000000004,end_time,datetime,single,false,viewable,[],null,regular,
 00000000-0000-4000-8000-000000000005,session_id,uuid,single,false,viewable,[],null,regular,
 00000000-0000-4000-8000-000000000006,interval_metadata,bool,single,false,viewable,[],false,regular,
-00000000-0000-4000-8000-000000000007,Project,string,single,false,editable,[],null,regular,
-00000000-0000-4000-8000-000000000008,Hourly Pay,string,single,false,editable,[],null,regular,
-00000000-0000-4000-8000-000000000009,Job,string,select,false,editable,"[""Client Work"",""Internal"",""Admin""]",null,regular,
-00000000-0000-4000-8000-00000000000a,Activity,string,single,false,editable,[],null,regular,
+20000000-0000-4000-8000-000000000001,Study,string,select,false,editable,"[""Market"",""Product"",""Technical"",""Personal""]",null,regular,
+20000000-0000-4000-8000-000000000002,Method,string,select,false,editable,"[""Interview"",""Reading"",""Experiment"",""Observation""]",null,regular,
+20000000-0000-4000-8000-000000000003,Evidence Strength,string,select,false,editable,"[""Weak"",""Moderate"",""Strong""]",null,regular,
+20000000-0000-4000-8000-000000000004,Tags,string,multiselect,false,addable,"[""Question"",""Finding"",""Risk"",""Follow up""]",[],regular,
+20000000-0000-4000-8000-000000000005,Source,path,single,false,editable,[],null,regular,
 
 --- table:attribute_reference_groups:schema
 name: attribute_reference_groups

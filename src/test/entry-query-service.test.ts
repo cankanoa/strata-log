@@ -28,7 +28,7 @@ const entries: EntryInterval[] = [
 ];
 
 describe("EntryQueryService", () => {
-  it("sorts by metadata column", () => {
+  it("sorts by metadata name", () => {
     const sorted = EntryQueryService.sortEntries(entries, { key: "project", direction: "asc" });
     expect(sorted.map((entry) => entry.metadata?.project)).toEqual(["Alpha", "Beta"]);
   });

@@ -1,0 +1,177 @@
+--- csdb
+format: CSDB
+version: 1
+name: testtttff
+tables:
+  - fields
+  - attribute_reference_groups
+  - sessions
+  - session_presets
+  - intervals
+  - metadata
+
+--- table:fields:schema
+name: fields
+columns:
+  id: text
+  name: text
+  type: text
+  selection: text
+  required: boolean
+  visibility: text
+  options_json: text
+  default_json: text
+  scope: text
+  attribute_reference_group_label: text
+required:
+  - id
+  - name
+  - type
+  - selection
+  - required
+  - visibility
+  - scope
+primary_key:
+  columns:
+    - id
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
+
+--- table:fields:data
+id,name,type,selection,required,visibility,options_json,default_json,scope,attribute_reference_group_label
+00000000-0000-4000-8000-000000000001,id,uuid,single,false,viewable,[],null,regular,""
+00000000-0000-4000-8000-000000000002,type,string,single,false,viewable,[],null,regular,""
+00000000-0000-4000-8000-000000000003,start_time,datetime,single,false,viewable,[],null,regular,""
+00000000-0000-4000-8000-000000000004,end_time,datetime,single,false,viewable,[],null,regular,""
+00000000-0000-4000-8000-000000000005,session_id,uuid,single,false,viewable,[],null,regular,""
+00000000-0000-4000-8000-000000000006,interval_metadata,bool,single,false,viewable,[],false,regular,""
+10000000-0000-4000-8000-000000000001,Client,string,select,false,editable,"[""Client Alpha"",""Client Beta"",""Internal""]",null,regular,""
+10000000-0000-4000-8000-000000000002,Billable,bool,single,false,editable,[],true,regular,""
+10000000-0000-4000-8000-000000000003,Work Phase,string,select,false,editable,"[""Discovery"",""Build"",""Review"",""Support""]",null,regular,""
+10000000-0000-4000-8000-000000000004,Deliverables,string,multiselect,false,addable,"[""Design"",""Code"",""Meeting"",""Documentation""]",[],regular,""
+10000000-0000-4000-8000-000000000005,Rate,float,single,false,hidden,[],null,regular,""
+
+--- table:attribute_reference_groups:schema
+name: attribute_reference_groups
+columns:
+  label: text
+required:
+  - label
+primary_key:
+  columns:
+    - label
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
+
+--- table:attribute_reference_groups:data
+label
+
+--- table:sessions:schema
+name: sessions
+columns:
+  id: text
+  type: text
+  interval_metadata: boolean
+required:
+  - id
+  - type
+  - interval_metadata
+primary_key:
+  columns:
+    - id
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
+
+--- table:sessions:data
+id,type,interval_metadata
+
+--- table:session_presets:schema
+name: session_presets
+columns:
+  id: text
+  name: text
+  metadata_json: text
+required:
+  - id
+  - name
+  - metadata_json
+primary_key:
+  columns:
+    - id
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
+
+--- table:session_presets:data
+id,name,metadata_json
+
+--- table:intervals:schema
+name: intervals
+columns:
+  id: text
+  session_id: text
+  start_time: timestamp
+  end_time: timestamp
+required:
+  - id
+  - session_id
+  - start_time
+primary_key:
+  columns:
+    - id
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
+
+--- table:intervals:data
+id,session_id,start_time,end_time
+
+--- table:metadata:schema
+name: metadata
+columns:
+  id: text
+  session_id: text
+  interval_id: text
+  field_name: text
+  value_text: text
+required:
+  - id
+  - field_name
+  - value_text
+primary_key:
+  columns:
+    - id
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
+
+--- table:metadata:data
+id,session_id,interval_id,field_name,value_text
+

@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { Play, Square } from "lucide-react";
 import { DateTimePicker } from "@/components/forms/date-time-picker";
 import { MetadataFieldsForm } from "@/components/forms/metadata-fields-form";
+import { AttributeReferenceOptionsDialog } from "@/features/database/attribute-reference-options-dialog";
+import { FieldOptionsDialog } from "@/features/database/field-options-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -13,8 +15,10 @@ import {
 } from "@/components/ui/dialog";
 import { SessionPresetsMenu } from "@/features/session/session-presets-menu";
 import { EntryForm } from "@/features/timer/entry-form";
-import { emptyMetadata } from "@/lib/metadata";
+import { getFieldOptionsWithAttributeReferences } from "@/lib/attribute-references";
+import { emptyMetadata, parseFieldOption, serializeFieldOption } from "@/lib/metadata";
 import { formatDurationWithSeconds, getRunningEntry, netDurationMs } from "@/lib/time";
+import type { FieldDefinition } from "@/lib/types";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
 
@@ -27,6 +31,8 @@ export function SessionSection() {
     setTrackDraftMetadata,
     addManualEntry,
     updateSessionPresets,
+    updateField,
+    updateFieldAttributeReferences,
     startLiveEntry,
     startLiveEntryAt,
     stopLiveEntry
@@ -37,6 +43,8 @@ export function SessionSection() {
     setTrackDraftMetadata: state.setTrackDraftMetadata,
     addManualEntry: state.addManualEntry,
     updateSessionPresets: state.updateSessionPresets,
+    updateField: state.updateField,
+    updateFieldAttributeReferences: state.updateFieldAttributeReferences,
     startLiveEntry: state.startLiveEntry,
     startLiveEntryAt: state.startLiveEntryAt,
     stopLiveEntry: state.stopLiveEntry
@@ -54,6 +62,10 @@ export function SessionSection() {
   const [startAtValue, setStartAtValue] = useState<string>();
   const [isStartAtOpen, setIsStartAtOpen] = useState(false);
   const [isManualOpen, setIsManualOpen] = useState(false);
+  const [optionsEditor, setOptionsEditor] = useState<{
+    name: string;
+    field: FieldDefinition;
+  } | null>(null);
   const [, setTick] = useState(0);
 
   useEffect(() => {
@@ -106,6 +118,14 @@ export function SessionSection() {
       setIsStartAtOpen(false);
       setStartAtValue(undefined);
     }
+  }
+
+  function openOptionsEditor(name: string) {
+    const field = file?.fields[name];
+    if (!field) {
+      return;
+    }
+    setOptionsEditor({ name, field });
   }
 
   return (
@@ -163,6 +183,7 @@ export function SessionSection() {
             attributeReferenceGroups={file?.attributeReferenceGroups ?? []}
             value={trackDraftMetadata}
             onChange={setTrackDraftMetadata}
+            onEditOptions={openOptionsEditor}
           />
 
           {!file ? (
@@ -213,6 +234,40 @@ export function SessionSection() {
           />
         </DialogContent>
       </Dialog>
+
+      {optionsEditor?.field.type === "attribute_reference" ? (
+        <AttributeReferenceOptionsDialog
+          open
+          title={`Attribute References for ${optionsEditor.name}`}
+          description="Enter the attribute reference group names this field should offer in Track. Existing names are reused, new ones are created automatically."
+          initialLabels={getFieldOptionsWithAttributeReferences(optionsEditor.field, file).map((option) => option.value)}
+          onOpenChange={(open) => !open && setOptionsEditor(null)}
+          onSave={async (labels) => {
+            const saved = await updateFieldAttributeReferences(optionsEditor.name, labels);
+            if (saved) {
+              setOptionsEditor(null);
+            }
+          }}
+        />
+      ) : optionsEditor ? (
+        <FieldOptionsDialog
+          open
+          title={`Options for ${optionsEditor.name}`}
+          description="Set the display label and saved value for each option."
+          field={optionsEditor.field}
+          initialOptions={(optionsEditor.field.options ?? []).map((option) =>
+            serializeFieldOption(parseFieldOption(option))
+          )}
+          onOpenChange={(open) => !open && setOptionsEditor(null)}
+          onSave={async (options) => {
+            const saved = await updateField(optionsEditor.name, { ...optionsEditor.field, options });
+            if (saved) {
+              setOptionsEditor(null);
+            }
+            return saved;
+          }}
+        />
+      ) : null}
     </>
   );
 }

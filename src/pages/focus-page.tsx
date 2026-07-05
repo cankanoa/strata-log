@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,6 +7,11 @@ import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
 
 const presets = [1, 5, 15, 30];
+const alertLabels = {
+  sound: "Sound",
+  vibrate: "Vibrate",
+  both: "Sound + Vibrate"
+} as const;
 
 function formatRemaining(totalSeconds: number) {
   const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
@@ -20,6 +25,7 @@ export function FocusPage() {
     focusMode,
     focusSoundMode,
     focusSelectedMinutes,
+    focusCustomSelected,
     focusCustomMinutes,
     focusDurationSeconds,
     focusEndsAt,
@@ -35,6 +41,7 @@ export function FocusPage() {
       focusMode: state.focusMode,
       focusSoundMode: state.focusSoundMode,
       focusSelectedMinutes: state.focusSelectedMinutes,
+      focusCustomSelected: state.focusCustomSelected,
       focusCustomMinutes: state.focusCustomMinutes,
       focusDurationSeconds: state.focusDurationSeconds,
       focusEndsAt: state.focusEndsAt,
@@ -51,20 +58,9 @@ export function FocusPage() {
 
   const isRunning = Boolean(focusEndsAt);
 
-  const totalMinutes = useMemo(() => {
-    if (focusCustomMinutes.trim()) {
-      const parsed = Number.parseInt(focusCustomMinutes, 10);
-      return Number.isNaN(parsed) ? focusSelectedMinutes : parsed;
-    }
-    return focusSelectedMinutes;
-  }, [focusCustomMinutes, focusSelectedMinutes]);
-
-  const remainingSeconds = useMemo(() => {
-    if (!focusEndsAt) {
-      return focusDurationSeconds;
-    }
-    return Math.max(0, Math.ceil((focusEndsAt - Date.now()) / 1000));
-  }, [focusDurationSeconds, focusEndsAt]);
+  const remainingSeconds = focusEndsAt
+    ? Math.max(0, Math.ceil((focusEndsAt - Date.now()) / 1000))
+    : focusDurationSeconds;
 
   function handleCustomMinutesChange(value: string) {
     const numeric = value.replace(/\D+/g, "");
@@ -139,7 +135,7 @@ export function FocusPage() {
               <button
                 key={preset}
                 type="button"
-                className={`inline-flex h-8 items-center justify-center rounded-lg border px-3 text-sm ${!focusCustomMinutes && focusSelectedMinutes === preset ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background"}`}
+                className={`inline-flex h-8 items-center justify-center rounded-lg border px-3 text-sm ${!focusCustomSelected && focusSelectedMinutes === preset ? "border-primary bg-primary text-primary-foreground" : "border-border bg-background"}`}
                 onClick={() => {
                   setFocusSelectedMinutes(preset);
                 }}
@@ -148,11 +144,12 @@ export function FocusPage() {
               </button>
             ))}
             <input
-              className="h-8 w-24 rounded-lg border border-border bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/30"
+              className={`h-8 w-24 rounded-lg border px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/30 ${focusCustomSelected ? "border-primary bg-primary text-primary-foreground placeholder:text-primary-foreground/70" : "border-border bg-background"}`}
               value={focusCustomMinutes}
               placeholder="Custom"
               inputMode="numeric"
               pattern="[0-9]*"
+              onFocus={() => setFocusCustomMinutes(focusCustomMinutes)}
               onChange={(event) => handleCustomMinutesChange(event.target.value)}
             />
           </div>
@@ -161,12 +158,12 @@ export function FocusPage() {
             <label className="text-sm font-medium">Complete Alert</label>
             <Select value={focusSoundMode} onValueChange={(value) => setFocusSoundMode(value as typeof focusSoundMode)}>
               <SelectTrigger className="w-full md:w-56">
-                <SelectValue />
+                <SelectValue>{alertLabels[focusSoundMode]}</SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="sound">Sound</SelectItem>
-                <SelectItem value="vibrate">Vibrate</SelectItem>
-                <SelectItem value="both">Sound + Vibrate</SelectItem>
+                <SelectItem value="sound">{alertLabels.sound}</SelectItem>
+                <SelectItem value="vibrate">{alertLabels.vibrate}</SelectItem>
+                <SelectItem value="both">{alertLabels.both}</SelectItem>
               </SelectContent>
             </Select>
           </div>

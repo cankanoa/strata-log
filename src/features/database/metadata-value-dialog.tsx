@@ -22,7 +22,7 @@ import {
 import {
   getFieldOptionDisplayValue,
   formatMetadataValue,
-  getFieldChoose,
+  getFieldSelection,
   getMetadataChoiceToken,
   getMetadataChoiceTokens,
   normalizeMetadataValue,
@@ -60,12 +60,13 @@ export function MetadataValueDialog({
   onSave
 }: MetadataValueDialogProps) {
   const [value, setValue] = useState<MetadataValue>(initialValue);
-  const optionFile = { version: 1 as const, fields: {}, attributeReferenceGroups, entries: [] };
-  const effectiveChoose =
-    field.type === "attribute_reference" && getFieldChoose(field) !== "multiselect"
+  const optionFile = { version: 1 as const, fields: {}, attributeReferenceGroups, sessionPresets: [], entries: [] };
+  const effectiveSelection =
+    field.type === "attribute_reference" && getFieldSelection(field) !== "multiselect"
       ? "select"
-      : getFieldChoose(field);
+      : getFieldSelection(field);
   const selectableOptions = getSelectableFieldOptions(field, optionFile);
+  const selectedOption = selectableOptions.find((option) => option.value === getMetadataChoiceToken(field, value));
 
   useEffect(() => {
     if (open) {
@@ -82,7 +83,7 @@ export function MetadataValueDialog({
         </DialogHeader>
 
         <div className="grid gap-4">
-          {effectiveChoose === "select" ? (
+          {effectiveSelection === "select" ? (
             <div className="grid gap-2">
               <Label>Value</Label>
               <Select
@@ -90,7 +91,9 @@ export function MetadataValueDialog({
                 onValueChange={(nextValue) => setValue(nextValue === "__unset__" ? undefined : nextValue ? parseMetadataValueForField(field, nextValue) : undefined)}
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Choose a value" />
+                  <SelectValue placeholder="Select a value">
+                    {selectedOption ? getFieldOptionDisplayValue(selectedOption) : undefined}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {allowClear ? <SelectItem value="__unset__">Unset</SelectItem> : null}
@@ -102,7 +105,7 @@ export function MetadataValueDialog({
                 </SelectContent>
               </Select>
             </div>
-          ) : effectiveChoose === "multiselect" ? (
+          ) : effectiveSelection === "multiselect" ? (
             <div className="grid gap-2">
               <Label>Value</Label>
               <div className="flex flex-wrap gap-2 rounded-md border border-border p-2">
@@ -136,7 +139,9 @@ export function MetadataValueDialog({
                 onValueChange={(nextValue) => setValue(nextValue === "__unset__" ? undefined : nextValue === "true")}
               >
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Choose a value" />
+                  <SelectValue placeholder="Select a value">
+                    {typeof value === "boolean" ? (value ? "True" : "False") : undefined}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {allowClear ? <SelectItem value="__unset__">Unset</SelectItem> : null}

@@ -1,5 +1,5 @@
 import type { NativeApi } from "@/lib/platform";
-import { getFieldChoose, getMetadataFields } from "@/lib/metadata";
+import { getFieldSelection, getMetadataFields } from "@/lib/metadata";
 import { resolveEntryMetadata } from "@/lib/attribute-references";
 import type { EntryInterval, FieldDefinition, FileHandleInfo, MetadataValue, TaskItem, TimeLogFile } from "@/lib/types";
 
@@ -11,9 +11,9 @@ type TaskSource = {
 };
 
 function getMarkdownGlobPatterns(field: FieldDefinition, value: MetadataValue): string[] {
-  const choose = getFieldChoose(field);
+  const selection = getFieldSelection(field);
 
-  if (choose === "multiselect") {
+  if (selection === "multiselect") {
     return Array.isArray(value)
       ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
       : [];

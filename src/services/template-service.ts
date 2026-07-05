@@ -22,35 +22,36 @@ function createFallbackDefaultTemplate(): TimeLogFile {
       ...BUILTIN_FIELD_DEFINITIONS,
       Project: {
         type: "string",
-        choose: "single",
+        selection: "single",
         required: false,
-        editable: true,
+        visibility: "editable",
         default: null
       },
       "Hourly Pay": {
         type: "string",
-        choose: "single",
+        selection: "single",
         required: false,
-        editable: true,
+        visibility: "editable",
         default: null
       },
       Job: {
         type: "string",
-        choose: "select",
+        selection: "select",
         options: ["[Client Work]Client Work", "[Internal]Internal", "[Admin]Admin"],
         required: false,
-        editable: true,
+        visibility: "editable",
         default: null
       },
       Activity: {
         type: "string",
-        choose: "single",
+        selection: "single",
         required: false,
-        editable: true,
+        visibility: "editable",
         default: null
       }
     },
     attributeReferenceGroups: [],
+    sessionPresets: [],
     entries: []
   };
 }
@@ -83,7 +84,15 @@ export const TemplateService = {
     templates.forEach((template) => {
       uniqueTemplates.set(template.id, template);
     });
-    return Array.from(uniqueTemplates.values());
+    return Array.from(uniqueTemplates.values()).sort((left, right) => {
+      const order = ["blank", "default"];
+      const leftIndex = order.indexOf(left.id);
+      const rightIndex = order.indexOf(right.id);
+      if (leftIndex !== -1 || rightIndex !== -1) {
+        return (leftIndex === -1 ? order.length : leftIndex) - (rightIndex === -1 ? order.length : rightIndex);
+      }
+      return left.name.localeCompare(right.name);
+    });
   },
   getTemplate(id: string): TemplateDefinition | undefined {
     return this.listTemplates().find((template) => template.id === id);

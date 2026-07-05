@@ -8,17 +8,22 @@ import {
   getActiveMetadataFields,
   getSelectableFieldOptions
 } from "@/lib/attribute-references";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  canEditField,
   getFieldOptionDisplayValue,
   formatMetadataValue,
-  getFieldChoose,
+  getFieldSelection,
   getMetadataChoiceToken,
   getMetadataChoiceTokens,
   getMetadataFields,
+  isFieldAddable,
+  isFieldHidden,
   metadataValuesEqual,
   parseMetadataValueForField
 } from "@/lib/metadata";
+import { Pencil } from "lucide-react";
 import type { MetadataValue, SessionMetadata, TimeLogFile } from "@/lib/types";
 
 type MetadataFieldsFormProps = {
@@ -26,14 +31,18 @@ type MetadataFieldsFormProps = {
   attributeReferenceGroups?: TimeLogFile["attributeReferenceGroups"];
   value: SessionMetadata;
   onChange: (value: SessionMetadata) => void;
+  onEditOptions?: (fieldName: string) => void;
 };
 
-export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], value, onChange }: MetadataFieldsFormProps) {
+const EDIT_OPTIONS_VALUE = "__edit_options__";
+
+export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], value, onChange, onEditOptions }: MetadataFieldsFormProps) {
   const file = useMemo<TimeLogFile>(
     () => ({
       version: 1,
       fields,
       attributeReferenceGroups,
+      sessionPresets: [],
       entries: []
     }),
     [attributeReferenceGroups, fields]
@@ -53,12 +62,15 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
 
   return (
     <div className="grid gap-4 md:grid-cols-2">
-      {getMetadataFields(visibleFields).map(([key, field]) => {
-        const effectiveChoose =
-          field.type === "attribute_reference" && getFieldChoose(field) !== "multiselect"
+      {getMetadataFields(visibleFields).filter(([, field]) => !isFieldHidden(field)).map(([key, field]) => {
+        const effectiveSelection =
+          field.type === "attribute_reference" && getFieldSelection(field) !== "multiselect"
             ? "select"
-            : getFieldChoose(field);
+            : getFieldSelection(field);
         const selectableOptions = getSelectableFieldOptions(field, file);
+        const selectedOption = selectableOptions.find((option) => option.value === getMetadataChoiceToken(field, value[key]));
+        const editable = canEditField(field);
+        const addable = editable && isFieldAddable(field) && Boolean(onEditOptions);
 
         return (
         <div className="grid gap-2" key={key}>
@@ -68,19 +80,25 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
               {field.required ? <span className="ml-1 text-destructive">*</span> : null}
             </Label>
           ) : null}
-          {effectiveChoose === "select" ? (
+          {effectiveSelection === "select" ? (
             <Select
               value={getMetadataChoiceToken(field, value[key])}
-              disabled={field.editable === false}
-              onValueChange={(nextValue) =>
+              disabled={!editable}
+              onValueChange={(nextValue) => {
+                if (nextValue === EDIT_OPTIONS_VALUE) {
+                  onEditOptions?.(key);
+                  return;
+                }
                 onChange({
                   ...value,
                   [key]: nextValue === "__unset__" ? undefined : nextValue ? parseMetadataValueForField(field, nextValue) : undefined
-                })
-              }
+                });
+              }}
             >
               <SelectTrigger id={`metadata-${key}`} className="w-full">
-                <SelectValue placeholder={`Choose ${key}${field.required ? " *" : ""}`} />
+                <SelectValue placeholder={`Select ${key}${field.required ? " *" : ""}`}>
+                  {selectedOption ? getFieldOptionDisplayValue(selectedOption) : undefined}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__unset__">Unset</SelectItem>
@@ -89,9 +107,18 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
                     {getFieldOptionDisplayValue(option)}
                   </SelectItem>
                 ))}
+                {addable ? (
+                  <>
+                    <SelectSeparator />
+                    <SelectItem value={EDIT_OPTIONS_VALUE}>
+                      <Pencil className="size-4" />
+                      Edit options
+                    </SelectItem>
+                  </>
+                ) : null}
               </SelectContent>
             </Select>
-          ) : effectiveChoose === "multiselect" ? (
+          ) : effectiveSelection === "multiselect" ? (
             <div className="flex flex-wrap gap-2 rounded-md border border-border p-2">
               {selectableOptions.map((option) => {
                 const current = getMetadataChoiceTokens(field, value[key]);
@@ -105,9 +132,9 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
                     }
                     key={option.raw}
                     type="button"
-                    disabled={field.editable === false}
+                    disabled={!editable}
                     onClick={() => {
-                      if (field.editable === false) {
+                      if (!editable) {
                         return;
                       }
                       const next = selected ? current.filter((item) => item !== option.value) : [...current, option.value];
@@ -126,11 +153,17 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
                   </button>
                 );
               })}
+              {addable ? (
+                <Button type="button" variant="ghost" size="sm" onClick={() => onEditOptions?.(key)}>
+                  <Pencil className="size-4" />
+                  Edit options
+                </Button>
+              ) : null}
             </div>
           ) : field.type === "bool" ? (
             <Select
               value={typeof value[key] === "boolean" ? String(value[key]) : "__unset__"}
-              disabled={field.editable === false}
+              disabled={!editable}
               onValueChange={(nextValue) =>
                 onChange({
                   ...value,
@@ -139,7 +172,9 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
               }
             >
               <SelectTrigger id={`metadata-${key}`} className="w-full">
-                <SelectValue placeholder={`Choose ${key}`} />
+                <SelectValue placeholder={`Select ${key}`}>
+                  {typeof value[key] === "boolean" ? (value[key] ? "True" : "False") : undefined}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__unset__">Unset</SelectItem>
@@ -152,7 +187,7 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
               <DateTimePicker
                 label={field.required ? `${key} *` : key}
                 value={typeof value[key] === "string" ? String(value[key]) : undefined}
-                disabled={field.editable === false}
+                disabled={!editable}
                 onChange={(nextValue) =>
                   onChange({
                     ...value,
@@ -165,7 +200,7 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
           ) : field.type === "path" ? (
             <PathInput
               value={typeof value[key] === "string" ? value[key] : ""}
-              disabled={field.editable === false}
+              disabled={!editable}
               onChange={(nextValue) =>
                 onChange({
                   ...value,
@@ -178,7 +213,7 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
               id={`metadata-${key}`}
               value={typeof value[key] === "string" ? value[key] : ""}
               required={field.required}
-              disabled={field.editable === false}
+              disabled={!editable}
               onChange={(event) =>
                 onChange({
                   ...value,
@@ -194,7 +229,7 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
               step={field.type === "int" ? "1" : "any"}
               value={value[key] === undefined ? "" : String(value[key])}
               required={field.required}
-              disabled={field.editable === false}
+              disabled={!editable}
               onChange={(event) =>
                 onChange({
                   ...value,
@@ -213,7 +248,7 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
               id={`metadata-${key}`}
               value={formatMetadataValue(value[key])}
               required={field.required}
-              disabled={field.editable === false}
+              disabled={!editable}
               onChange={(event) =>
                 onChange({
                   ...value,

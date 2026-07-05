@@ -1,13 +1,13 @@
-import type { FieldChoose, FieldDefinition, FieldType, MetadataValue, SessionMetadata } from "@/lib/types";
+import type { FieldSelection, FieldDefinition, FieldVisibility, FieldType, MetadataValue, SessionMetadata } from "@/lib/types";
 import { formatDateTimeValue } from "@/lib/datetime";
 
 export const BUILTIN_FIELD_DEFINITIONS = {
-  id: { type: "uuid", choose: "single", required: false, editable: false, default: null },
-  type: { type: "string", choose: "single", required: false, editable: false, default: null },
-  start_time: { type: "datetime", choose: "single", required: false, editable: false, default: null },
-  end_time: { type: "datetime", choose: "single", required: false, editable: false, default: null },
-  session_id: { type: "uuid", choose: "single", required: false, editable: false, default: null },
-  interval_metadata: { type: "bool", choose: "single", required: false, editable: false, default: false }
+  id: { type: "uuid", selection: "single", required: false, visibility: "viewable", default: null },
+  type: { type: "string", selection: "single", required: false, visibility: "viewable", default: null },
+  start_time: { type: "datetime", selection: "single", required: false, visibility: "viewable", default: null },
+  end_time: { type: "datetime", selection: "single", required: false, visibility: "viewable", default: null },
+  session_id: { type: "uuid", selection: "single", required: false, visibility: "viewable", default: null },
+  interval_metadata: { type: "bool", selection: "single", required: false, visibility: "viewable", default: false }
 } as const satisfies Record<string, FieldDefinition>;
 
 export const fieldTypeOptions: FieldType[] = [
@@ -22,9 +22,11 @@ export const fieldTypeOptions: FieldType[] = [
   "uuid"
 ];
 
-export const fieldChooseOptions: FieldChoose[] = ["single", "select", "multiselect"];
-export const attributeReferenceChooseOptions: FieldChoose[] = ["select", "multiselect"];
-export const boolChooseOptions: FieldChoose[] = ["single"];
+export const fieldSelectionOptions: FieldSelection[] = ["single", "select", "multiselect"];
+export const attributeReferenceSelectionOptions: FieldSelection[] = ["select", "multiselect"];
+export const boolSelectionOptions: FieldSelection[] = ["single"];
+export const fieldVisibilityOptions: FieldVisibility[] = ["editable", "viewable", "hidden"];
+export const addableFieldVisibilityOptions: FieldVisibility[] = ["editable", "viewable", "hidden", "addable"];
 
 export type ParsedFieldOption = {
   display?: string;
@@ -33,19 +35,19 @@ export type ParsedFieldOption = {
 };
 
 export function normalizeFieldDefinition(field: FieldDefinition): FieldDefinition {
-  const legacyChoose =
-    field.type === "select" ? "select" : field.type === "multiselect" ? "multiselect" : "single";
-  const choose = field.type === "bool" ? "single" : field.choose ?? legacyChoose;
-  const type: FieldType = field.type === "select" || field.type === "multiselect" ? "string" : field.type;
+  const selection = field.type === "bool" ? "single" : field.selection ?? "single";
   const options =
-    field.type === "bool" || choose === "single"
+    field.type === "bool" || selection === "single"
       ? undefined
       : field.options?.filter((value) => value.trim().length > 0);
+  const visibility = normalizeFieldVisibility({
+    ...field,
+    selection
+  });
   return {
     ...field,
-    type,
-    choose,
-    editable: field.editable ?? true,
+    selection,
+    visibility,
     options
   };
 }
@@ -75,22 +77,54 @@ export function getSessionMetadataFields(fields: Record<string, FieldDefinition>
   return getMetadataFields(fields).filter(([, field]) => field.type !== "attribute_reference");
 }
 
-export function getFieldChoose(field: FieldDefinition | undefined): FieldChoose {
-  return field?.choose ?? "single";
+export function getFieldSelection(field: FieldDefinition | undefined): FieldSelection {
+  return field?.selection ?? "single";
 }
 
-export function getChooseOptionsForFieldType(type: FieldType): FieldChoose[] {
+export function getSelectionOptionsForFieldType(type: FieldType): FieldSelection[] {
   if (type === "attribute_reference") {
-    return attributeReferenceChooseOptions;
+    return attributeReferenceSelectionOptions;
   }
   if (type === "bool") {
-    return boolChooseOptions;
+    return boolSelectionOptions;
   }
-  return fieldChooseOptions;
+  return fieldSelectionOptions;
 }
 
 export function supportsOptions(field: FieldDefinition | undefined): boolean {
-  return field?.type === "attribute_reference" || getFieldChoose(field) !== "single";
+  return field?.type === "attribute_reference" || getFieldSelection(field) !== "single";
+}
+
+export function supportsAddableVisibility(field: FieldDefinition | undefined): boolean {
+  return field ? ["select", "multiselect"].includes(getFieldSelection(field)) : false;
+}
+
+export function getFieldVisibilityOptions(field: FieldDefinition | undefined): FieldVisibility[] {
+  return supportsAddableVisibility(field) ? addableFieldVisibilityOptions : fieldVisibilityOptions;
+}
+
+export function normalizeFieldVisibility(field: FieldDefinition | undefined): FieldVisibility {
+  if (!field) {
+    return "editable";
+  }
+  const visibility = field.visibility;
+  if (!visibility) {
+    throw new Error("Field visibility is required.");
+  }
+  return visibility === "addable" && !supportsAddableVisibility(field) ? "editable" : visibility;
+}
+
+export function canEditField(field: FieldDefinition | undefined): boolean {
+  const visibility = normalizeFieldVisibility(field);
+  return visibility === "editable" || visibility === "addable";
+}
+
+export function isFieldHidden(field: FieldDefinition | undefined): boolean {
+  return normalizeFieldVisibility(field) === "hidden";
+}
+
+export function isFieldAddable(field: FieldDefinition | undefined): boolean {
+  return normalizeFieldVisibility(field) === "addable";
 }
 
 export function parseFieldOption(raw: string): ParsedFieldOption {
@@ -222,7 +256,7 @@ export function getMetadataChoiceDisplayValue(field: FieldDefinition | undefined
     return getMetadataDisplayValue(value);
   }
 
-  if (getFieldChoose(field) === "multiselect") {
+  if (getFieldSelection(field) === "multiselect") {
     const values = Array.isArray(value) ? value : [];
     return values
       .map((item) => {
@@ -240,8 +274,8 @@ export function formatMetadataFieldValue(field: FieldDefinition | undefined, val
   if (!field) {
     return getMetadataDisplayValue(value);
   }
-  const choose = getFieldChoose(field);
-  if (field.type === "attribute_reference" || choose === "select" || choose === "multiselect") {
+  const selection = getFieldSelection(field);
+  if (field.type === "attribute_reference" || selection === "select" || selection === "multiselect") {
     return getMetadataChoiceDisplayValue(field, value);
   }
   if (field.type === "datetime") {
@@ -275,7 +309,7 @@ export function createEmptyMetadataValue(field: FieldDefinition): MetadataValue 
   if (defaultValue !== undefined) {
     return defaultValue;
   }
-  return getFieldChoose(field) === "multiselect" ? [] : undefined;
+  return getFieldSelection(field) === "multiselect" ? [] : undefined;
 }
 
 export function emptyMetadata(fields: Record<string, FieldDefinition>): SessionMetadata {
@@ -309,15 +343,15 @@ export function normalizeMetadataValue(field: FieldDefinition, value: MetadataVa
     return undefined;
   }
 
-  const choose = getFieldChoose(field);
-  if (choose === "multiselect") {
+  const selection = getFieldSelection(field);
+  if (selection === "multiselect") {
     const values = Array.isArray(value) ? value : String(value).split(",").map((item) => item.trim()).filter(Boolean);
     return values
-      .map((item) => normalizeMetadataValue({ ...field, choose: "single" }, item))
+      .map((item) => normalizeMetadataValue({ ...field, selection: "single" }, item))
       .filter((item): item is boolean | number | string => item !== undefined);
   }
-  if (choose === "select") {
-    return normalizeMetadataValue({ ...field, choose: "single" }, Array.isArray(value) ? value[0] : value);
+  if (selection === "select") {
+    return normalizeMetadataValue({ ...field, selection: "single" }, Array.isArray(value) ? value[0] : value);
   }
 
   switch (field.type) {
@@ -370,8 +404,8 @@ export function parseCellValue(field: FieldDefinition, raw: string): MetadataVal
     return undefined;
   }
 
-  const choose = getFieldChoose(field);
-  if (choose === "multiselect") {
+  const selection = getFieldSelection(field);
+  if (selection === "multiselect") {
     return raw
       .split("|")
       .map((item) => item.trim())
@@ -379,7 +413,7 @@ export function parseCellValue(field: FieldDefinition, raw: string): MetadataVal
       .map((item) => parseMetadataValueForField(field, item))
       .filter((item): item is boolean | number | string => item !== undefined);
   }
-  if (choose === "select") {
+  if (selection === "select") {
     return parseMetadataValueForField(field, raw);
   }
 
@@ -390,8 +424,8 @@ export function serializeCellValue(field: FieldDefinition, value: MetadataValue)
   if (value === undefined) {
     return "";
   }
-  const choose = getFieldChoose(field);
-  if (choose === "multiselect") {
+  const selection = getFieldSelection(field);
+  if (selection === "multiselect") {
     return Array.isArray(value)
       ? value
           .map((item) => {

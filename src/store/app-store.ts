@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { applyResolvedMetadataDefaults, getResolvedMetadataFields } from "@/lib/attribute-references";
 import { ConflictService } from "@/services/conflict-service";
+import type { DatabaseLocation } from "@/lib/database-registry";
 import { getPlatformApi, loadRawIntoFile } from "@/lib/platform";
 import { normalizeMetadata } from "@/lib/metadata";
 import { TimeLogDatabase } from "@/lib/time-log-database";
@@ -34,6 +35,7 @@ type StoreState = AppSnapshot & {
   focusMode: FocusMode;
   focusSoundMode: FocusAlertMode;
   focusSelectedMinutes: number;
+  focusCustomSelected: boolean;
   focusCustomMinutes: string;
   focusStartedAt: number | null;
   focusDurationSeconds: number;
@@ -44,6 +46,7 @@ type StoreState = AppSnapshot & {
   recentSaveRaws: Array<{ raw: string; savedAt: number }>;
   clearErrors: () => void;
   openFile: () => Promise<void>;
+  loadDatabaseFile: (source: { location: DatabaseLocation; url: string }) => Promise<boolean>;
   unloadFile: () => void;
   createFileFromTemplate: (templateId: string) => Promise<void>;
   saveCurrentFile: () => Promise<void>;
@@ -106,7 +109,8 @@ async function watchHandle(handle: FileHandleInfo, set: (partial: Partial<StoreS
       return;
     }
     const rawCurrent = current.file ? serializeTimeLogYaml(current.file) : "";
-    if (rawCurrent === raw) {
+    const rawParsed = serializeTimeLogYaml(parsed.file);
+    if (rawCurrent === raw || rawCurrent === rawParsed) {
       return;
     }
     set({
@@ -160,6 +164,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
   focusMode: "focus",
   focusSoundMode: "sound",
   focusSelectedMinutes: 15,
+  focusCustomSelected: false,
   focusCustomMinutes: "",
   focusStartedAt: null,
   focusDurationSeconds: 15 * 60,
@@ -208,6 +213,35 @@ export const useAppStore = create<StoreState>((set, get) => ({
       recentSaveRaws: []
     });
     await watchHandle(response.handle, set, get);
+  },
+
+  async loadDatabaseFile(source) {
+    const response = await getPlatformApi().loadDatabaseFile(source);
+    if (!response) {
+      set({ errors: ["The selected database file could not be loaded."] });
+      return false;
+    }
+    let parsed: TimeLogFile;
+    try {
+      parsed = await loadRawIntoFile(response.raw);
+    } catch (error) {
+      set({
+        errors: [error instanceof Error ? error.message : "Failed to load database."]
+      });
+      return false;
+    }
+    get().watchCleanup?.();
+    set({
+      file: parsed,
+      fileHandle: response.handle,
+      trackDraftMetadata: applyResolvedMetadataDefaults(parsed, normalizeMetadata(getResolvedMetadataFields(parsed), get().trackDraftMetadata)),
+      errors: [],
+      hasUnsavedChanges: false,
+      conflict: ConflictService.clean(),
+      recentSaveRaws: []
+    });
+    await watchHandle(response.handle, set, get);
+    return true;
   },
 
   unloadFile() {
@@ -314,6 +348,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
   setFocusSelectedMinutes(focusSelectedMinutes) {
     set((state) => ({
       focusSelectedMinutes,
+      focusCustomSelected: false,
       focusCustomMinutes: "",
       focusDurationSeconds: state.focusEndsAt ? state.focusDurationSeconds : focusSelectedMinutes * 60,
       focusCompletedAt: null
@@ -324,9 +359,10 @@ export const useAppStore = create<StoreState>((set, get) => ({
     const numeric = focusCustomMinutes.replace(/\D+/g, "");
     const parsed = Number.parseInt(numeric, 10);
     set((state) => ({
+      focusCustomSelected: true,
       focusCustomMinutes: numeric,
       focusDurationSeconds:
-        state.focusEndsAt || Number.isNaN(parsed) || parsed <= 0 ? state.focusDurationSeconds : parsed * 60,
+        state.focusEndsAt ? state.focusDurationSeconds : Number.isNaN(parsed) || parsed <= 0 ? 0 : parsed * 60,
       focusCompletedAt: null
     }));
   },
@@ -337,7 +373,9 @@ export const useAppStore = create<StoreState>((set, get) => ({
     const durationSeconds =
       state.focusCompletedAt && state.focusDurationSeconds > 0
         ? state.focusDurationSeconds
-        : !Number.isNaN(parsedCustom) && parsedCustom > 0
+        : state.focusCustomSelected
+          ? (!Number.isNaN(parsedCustom) && parsedCustom > 0 ? parsedCustom * 60 : 0)
+          : !Number.isNaN(parsedCustom) && parsedCustom > 0
           ? parsedCustom * 60
           : state.focusSelectedMinutes * 60;
     const startedAt = Date.now();
@@ -366,7 +404,9 @@ export const useAppStore = create<StoreState>((set, get) => ({
     const state = get();
     const parsedCustom = Number.parseInt(state.focusCustomMinutes, 10);
     const durationSeconds =
-      !Number.isNaN(parsedCustom) && parsedCustom > 0 ? parsedCustom * 60 : state.focusSelectedMinutes * 60;
+      state.focusCustomSelected
+        ? (!Number.isNaN(parsedCustom) && parsedCustom > 0 ? parsedCustom * 60 : 0)
+        : state.focusSelectedMinutes * 60;
     set({
       focusStartedAt: null,
       focusDurationSeconds: durationSeconds,

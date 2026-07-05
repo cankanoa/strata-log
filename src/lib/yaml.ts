@@ -2,7 +2,8 @@ import { v4 as uuidv4 } from "uuid";
 import { CSDBDatabase, serializeCSDB, type Row, type TableSchema } from "@/lib/csdb";
 import {
   ensureBuiltinFields,
-  getFieldChoose,
+  getFieldSelection,
+  normalizeFieldVisibility,
   getFieldOptions,
   getMetadataFields,
   hasMetadataValue,
@@ -28,15 +29,15 @@ const FIELD_TABLE: TableSchema = {
     id: "text",
     name: "text",
     type: "text",
-    choose: "text",
+    selection: "text",
     required: "boolean",
-    editable: "boolean",
+    visibility: "text",
     options_json: "text",
     default_json: "text",
     scope: "text",
     attribute_reference_group_label: "text"
   },
-  required: ["id", "name", "type", "choose", "required", "editable", "scope"],
+  required: ["id", "name", "type", "selection", "required", "visibility", "scope"],
   primary_key: { columns: ["id"] }
 };
 
@@ -123,6 +124,12 @@ function tableRows(db: CSDBDatabase, tableName: string): Row[] {
   return db.document.tables.get(tableName)?.rows ?? [];
 }
 
+function missingSchemaTables(db: CSDBDatabase): string[] {
+  return SCHEMAS
+    .map((schema) => schema.name)
+    .filter((name) => !db.document.tables.has(name));
+}
+
 function asString(value: unknown): string {
   return typeof value === "string" ? value : String(value ?? "");
 }
@@ -133,19 +140,19 @@ function asBoolean(value: unknown): boolean {
 
 function createScalarValue(field: FieldDefinition, value: boolean | number | string): { value_text: string } {
   return {
-    value_text: serializeCellValue({ ...field, choose: "single", options: undefined }, value)
+    value_text: serializeCellValue({ ...field, selection: "single", options: undefined }, value)
   };
 }
 
 function readScalarValue(field: FieldDefinition, row: Row): MetadataValue {
-  return parseCellValue({ ...field, choose: "single", options: undefined }, asString(row.value_text));
+  return parseCellValue({ ...field, selection: "single", options: undefined }, asString(row.value_text));
 }
 
 function readValueGroup(field: FieldDefinition, rows: Row[]): MetadataValue {
   const values = rows
     .map((row) => readScalarValue(field, row))
     .filter((value): value is boolean | number | string => value !== undefined);
-  return getFieldChoose(field) === "multiselect" ? values : values[0];
+  return getFieldSelection(field) === "multiselect" ? values : values[0];
 }
 
 function serializeJsonValue(value: MetadataValue | null | undefined): string {
@@ -189,7 +196,7 @@ function appendValueRows(
     return;
   }
 
-  const values = getFieldChoose(field) === "multiselect" ? (Array.isArray(value) ? value : []) : [value];
+  const values = getFieldSelection(field) === "multiselect" ? (Array.isArray(value) ? value : []) : [value];
   values.forEach((item) => {
     if (item === undefined || item === null || Array.isArray(item)) {
       return;
@@ -209,9 +216,9 @@ function parseFieldRows(db: CSDBDatabase): ParsedFieldRow[] {
     const field: FieldDefinition = normalizeFieldDefinition({
       id: asString(row.id),
       type: asString(row.type) as FieldDefinition["type"],
-      choose: asString(row.choose) as FieldDefinition["choose"],
+      selection: asString(row.selection) as FieldDefinition["selection"],
       required: asBoolean(row.required),
-      editable: row.editable === undefined ? true : asBoolean(row.editable),
+      visibility: asString(row.visibility) as FieldDefinition["visibility"],
       options: (() => {
         const parsedOptions = parseJsonText(row.options_json);
         return Array.isArray(parsedOptions) ? parsedOptions.map((item) => String(item)) : undefined;
@@ -333,18 +340,17 @@ export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
   const normalizedFile: TimeLogFile = {
     ...file,
     fields: ensureBuiltinFields(file.fields),
-    attributeReferenceGroups: file.attributeReferenceGroups ?? [],
-    sessionPresets: file.sessionPresets ?? []
+    attributeReferenceGroups: file.attributeReferenceGroups
   };
 
   const db = createDatabase();
   const fieldRows: Row[] = [];
   const groupRows: Row[] = [];
-  const presetRows: Row[] = normalizedFile.sessionPresets?.map((preset) => ({
+  const presetRows: Row[] = normalizedFile.sessionPresets.map((preset) => ({
     id: preset.id,
     name: preset.name,
     metadata_json: JSON.stringify(preset.metadata ?? {})
-  })) ?? [];
+  }));
   const sessionRows: Row[] = [];
   const intervalRows: Row[] = [];
   const metadataRows: Row[] = [];
@@ -371,9 +377,9 @@ export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
       id: fieldId,
       name,
       type: field.type,
-      choose: getFieldChoose(field),
+      selection: getFieldSelection(field),
       required: Boolean(field.required),
-      editable: field.editable !== false,
+      visibility: normalizeFieldVisibility(field),
       options_json: serializeJsonValue(
         getFieldOptions(field).map((option) =>
           serializeFieldOption({
@@ -455,12 +461,20 @@ export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
 }
 
 export function fileFromDatabase(db: CSDBDatabase): { file: TimeLogFile | null; errors: string[] } {
+  const missingTables = missingSchemaTables(db);
+  if (missingTables.length > 0) {
+    return {
+      file: null,
+      errors: [`Missing required table(s): ${missingTables.join(", ")}.`]
+    };
+  }
+
   const fieldRows = parseFieldRows(db);
   const attributeReferenceGroups = parseAttributeReferenceGroups(db, fieldRows);
   const fields = parseFields(db);
   const resolvedFields = {
     ...fields,
-    ...getAttributeReferenceFieldDefinitions({ version: 1, fields, attributeReferenceGroups, entries: [] })
+    ...getAttributeReferenceFieldDefinitions({ version: 1, fields, attributeReferenceGroups, sessionPresets: [], entries: [] })
   };
 
   return validateFile({

@@ -1,6 +1,6 @@
 import {
   applyMetadataDefaults,
-  getFieldChoose,
+  getFieldSelection,
   getFieldOptions,
   getMetadataFields,
   normalizeMetadataValue,
@@ -73,8 +73,8 @@ export function getResolvedMetadataFields(
 }
 
 function selectedReferenceIds(field: FieldDefinition, value: MetadataValue): string[] {
-  const choose = getFieldChoose(field);
-  if (choose === "multiselect") {
+  const selection = getFieldSelection(field);
+  if (selection === "multiselect") {
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
   }
   return typeof value === "string" && value.trim().length > 0 ? [value] : [];

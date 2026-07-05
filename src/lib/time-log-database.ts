@@ -1,10 +1,11 @@
 import { v4 as uuidv4 } from "uuid";
 import type { CSDBDatabase, Row } from "@/lib/csdb";
 import {
-  getFieldChoose,
+  getFieldSelection,
   getFieldOptions,
   getMetadataFields,
   hasMetadataValue,
+  normalizeFieldVisibility,
   normalizeFieldDefinition,
   normalizeMetadata,
   parseFieldOption,
@@ -23,7 +24,7 @@ function rows(db: CSDBDatabase, tableName: string): Row[] {
 function singleValueField(field: FieldDefinition): FieldDefinition {
   return {
     ...field,
-    choose: "single",
+    selection: "single",
     options: undefined
   };
 }
@@ -37,7 +38,7 @@ function toStoredValues(field: FieldDefinition, value: MetadataValue): string[] 
     return [];
   }
 
-  if (getFieldChoose(field) === "multiselect") {
+  if (getFieldSelection(field) === "multiselect") {
     return (Array.isArray(value) ? value : [])
       .filter((item): item is boolean | number | string => item !== undefined && item !== null)
       .map((item) => serializeCellValue(singleValueField(field), item));
@@ -102,9 +103,9 @@ function insertFieldDefinitionRows(db: CSDBDatabase, name: string, rawField: Fie
     db.table("fields").where({ id: fieldId }).update({
       name,
       type: field.type,
-      choose: getFieldChoose(field),
+      selection: getFieldSelection(field),
       required: Boolean(field.required),
-      editable: field.editable !== false,
+      visibility: normalizeFieldVisibility(field),
       options_json: serializeJsonValue(
         getFieldOptions(field).map((option) =>
           serializeFieldOption({
@@ -123,9 +124,9 @@ function insertFieldDefinitionRows(db: CSDBDatabase, name: string, rawField: Fie
       id: fieldId,
       name,
       type: field.type,
-      choose: getFieldChoose(field),
+      selection: getFieldSelection(field),
       required: Boolean(field.required),
-      editable: field.editable !== false,
+      visibility: normalizeFieldVisibility(field),
       options_json: serializeJsonValue(
         getFieldOptions(field).map((option) =>
           serializeFieldOption({
@@ -317,15 +318,15 @@ function getFieldDefinition(file: TimeLogFile, name: string, groupLabel?: string
   return file.attributeReferenceGroups.find((group) => group.label === groupLabel)?.fields[name];
 }
 
-function convertChooseValue(
+function convertSelectionValue(
   value: MetadataValue,
-  nextChoose: NonNullable<FieldDefinition["choose"]>
+  nextSelection: NonNullable<FieldDefinition["selection"]>
 ): MetadataValue {
   if (!hasMetadataValue(value)) {
     return undefined;
   }
 
-  if (nextChoose === "multiselect") {
+  if (nextSelection === "multiselect") {
     return Array.isArray(value)
       ? value.filter((item): item is boolean | number | string => item !== undefined)
       : [value].filter((item): item is boolean | number | string => item !== undefined);
@@ -380,21 +381,21 @@ function collectObservedFieldOptionValues(file: TimeLogFile, name: string, field
   return [...serialized];
 }
 
-function convertFieldChooseInFile(
+function convertFieldSelectionInFile(
   file: TimeLogFile,
   name: string,
   currentField: FieldDefinition,
   nextField: FieldDefinition,
   groupLabel?: string
 ): TimeLogFile {
-  const currentChoose = getFieldChoose(currentField);
-  const nextChoose = getFieldChoose(nextField);
+  const currentSelection = getFieldSelection(currentField);
+  const nextSelection = getFieldSelection(nextField);
 
-  if (currentChoose === nextChoose) {
+  if (currentSelection === nextSelection) {
     return file;
   }
 
-  const nextDefault = convertChooseValue(currentField.default ?? undefined, nextChoose);
+  const nextDefault = convertSelectionValue(currentField.default ?? undefined, nextSelection);
 
   return {
     ...updateEntries(file, (entry) => {
@@ -405,7 +406,7 @@ function convertFieldChooseInFile(
             ...interval,
             metadata: {
               ...(interval.metadata ?? {}),
-              [name]: convertChooseValue(interval.metadata?.[name], nextChoose)
+              [name]: convertSelectionValue(interval.metadata?.[name], nextSelection)
             }
           }))
         };
@@ -415,7 +416,7 @@ function convertFieldChooseInFile(
         ...entry,
         metadata: {
           ...(entry.metadata ?? {}),
-          [name]: convertChooseValue(entry.metadata?.[name], nextChoose)
+          [name]: convertSelectionValue(entry.metadata?.[name], nextSelection)
         }
       };
     }),
@@ -545,14 +546,14 @@ export const TimeLogDatabase = {
 
   updateField(file: TimeLogFile, name: string, nextField: FieldDefinition, groupLabel?: string): TimeLogFile {
     const currentField = getFieldDefinition(file, name, groupLabel);
-    const preparedFile = currentField ? convertFieldChooseInFile(file, name, currentField, nextField, groupLabel) : file;
-    const nextChoose = getFieldChoose(nextField);
+    const preparedFile = currentField ? convertFieldSelectionInFile(file, name, currentField, nextField, groupLabel) : file;
+    const nextSelection = getFieldSelection(nextField);
     const preparedField = currentField
       ? {
           ...nextField,
-          default: convertChooseValue(nextField.default ?? currentField.default ?? undefined, nextChoose),
+          default: convertSelectionValue(nextField.default ?? currentField.default ?? undefined, nextSelection),
           options:
-            nextChoose === "single"
+            nextSelection === "single"
               ? undefined
               : nextField.options && nextField.options.length > 0
                 ? nextField.options

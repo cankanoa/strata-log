@@ -1,9 +1,13 @@
-import { app, BrowserWindow, Menu, Tray, ipcMain, dialog, nativeImage } from "electron";
+import { app, BrowserWindow, Menu, Tray, ipcMain, dialog, nativeImage, shell } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import fg from "fast-glob";
+import { parseDocument, serializeDocument } from "../node_modules/@csdb/javascript/dist/storage/document.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const appRootPath = app.isPackaged ? process.resourcesPath : process.cwd();
+const registryPath = path.join(appRootPath, "databases.csdb");
+const internalDataPath = path.join(appRootPath, "data");
 let mainWindow = null;
 let tray = null;
 let trayState = {
@@ -13,6 +17,23 @@ let trayState = {
 };
 let isQuitting = false;
 const watchers = new Map();
+function normalizeInternalDatabaseName(name) {
+    return name.trim().replace(/\.csdb$/i, "");
+}
+function internalDatabasePath(name) {
+    return path.join(internalDataPath, `${normalizeInternalDatabaseName(name)}.csdb`);
+}
+function databaseFilePath(payload) {
+    return payload.location === "Internal" ? internalDatabasePath(payload.url) : payload.url.trim();
+}
+function databaseFileName(name) {
+    return `${normalizeInternalDatabaseName(name)}.csdb`;
+}
+function renameDatabaseDocument(raw, name) {
+    const document = parseDocument(raw);
+    document.metadata.name = name;
+    return serializeDocument(document);
+}
 function sendTrayAction(action) {
     if (mainWindow) {
         mainWindow.webContents.send("tray-action", action);
@@ -149,6 +170,147 @@ ipcMain.handle("file:create-from-template", async (_, suggestedName, raw) => {
         },
         raw
     };
+});
+ipcMain.handle("database-registry:read", async () => {
+    return fs.readFileSync(registryPath, "utf8");
+});
+ipcMain.handle("database-registry:save", async (_, raw) => {
+    const tempPath = `${registryPath}.tmp`;
+    fs.writeFileSync(tempPath, raw, "utf8");
+    fs.renameSync(tempPath, registryPath);
+});
+ipcMain.handle("database-file:choose-url", async (_, suggestedName) => {
+    const result = await dialog.showSaveDialog({
+        defaultPath: `${suggestedName.trim() || "strata-log"}.csdb`,
+        filters: [{ name: "CSDB", extensions: ["csdb"] }]
+    });
+    return result.canceled || !result.filePath ? null : result.filePath;
+});
+ipcMain.handle("database-file:info", async (_, payload) => {
+    const targetPath = databaseFilePath(payload);
+    if (!targetPath) {
+        return null;
+    }
+    const exists = fs.existsSync(targetPath) && !fs.statSync(targetPath).isDirectory();
+    return {
+        path: targetPath,
+        exists,
+        updatedAt: exists ? fs.statSync(targetPath).mtime.toISOString() : null
+    };
+});
+ipcMain.handle("database-file:load", async (_, payload) => {
+    const targetPath = databaseFilePath(payload);
+    if (!targetPath || !fs.existsSync(targetPath) || fs.statSync(targetPath).isDirectory()) {
+        return null;
+    }
+    return {
+        handle: {
+            path: targetPath,
+            name: path.basename(targetPath)
+        },
+        raw: fs.readFileSync(targetPath, "utf8")
+    };
+});
+ipcMain.handle("database-file:import", async () => {
+    const result = await dialog.showOpenDialog({
+        properties: ["openFile"],
+        filters: [{ name: "CSDB", extensions: ["csdb"] }]
+    });
+    if (result.canceled || !result.filePaths[0]) {
+        return null;
+    }
+    const sourcePath = result.filePaths[0];
+    const registryUrl = normalizeInternalDatabaseName(path.basename(sourcePath));
+    const targetPath = internalDatabasePath(registryUrl);
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    if (sourcePath !== targetPath) {
+        fs.copyFileSync(sourcePath, targetPath);
+    }
+    return { registryUrl };
+});
+ipcMain.handle("database-file:reference", async () => {
+    const result = await dialog.showOpenDialog({
+        properties: ["openFile"],
+        filters: [{ name: "CSDB", extensions: ["csdb"] }]
+    });
+    if (result.canceled || !result.filePaths[0]) {
+        return null;
+    }
+    return { registryUrl: result.filePaths[0] };
+});
+ipcMain.handle("database-file:export", async (_, payload) => {
+    const sourcePath = internalDatabasePath(payload.url);
+    if (!sourcePath || !fs.existsSync(sourcePath) || fs.statSync(sourcePath).isDirectory()) {
+        return false;
+    }
+    const result = await dialog.showSaveDialog({
+        defaultPath: databaseFileName(payload.url),
+        filters: [{ name: "CSDB", extensions: ["csdb"] }]
+    });
+    if (result.canceled || !result.filePath) {
+        return false;
+    }
+    fs.copyFileSync(sourcePath, result.filePath);
+    return true;
+});
+ipcMain.handle("database-file:rename", async (_, payload) => {
+    const nextName = normalizeInternalDatabaseName(payload.name);
+    if (!nextName) {
+        return null;
+    }
+    const currentPath = databaseFilePath(payload);
+    if (!currentPath || !fs.existsSync(currentPath) || fs.statSync(currentPath).isDirectory()) {
+        return null;
+    }
+    const nextPath = payload.location === "Internal"
+        ? internalDatabasePath(nextName)
+        : path.join(path.dirname(currentPath), databaseFileName(nextName));
+    if (currentPath !== nextPath && fs.existsSync(nextPath)) {
+        return null;
+    }
+    const registryUrl = payload.location === "Internal" ? nextName : nextPath;
+    const raw = renameDatabaseDocument(fs.readFileSync(currentPath, "utf8"), nextName);
+    fs.mkdirSync(path.dirname(nextPath), { recursive: true });
+    fs.writeFileSync(`${nextPath}.tmp`, raw, "utf8");
+    fs.renameSync(`${nextPath}.tmp`, nextPath);
+    if (currentPath !== nextPath && fs.existsSync(currentPath)) {
+        watchers.get(currentPath)?.close();
+        watchers.delete(currentPath);
+        fs.unlinkSync(currentPath);
+    }
+    return {
+        handle: {
+            path: nextPath,
+            name: path.basename(nextPath)
+        },
+        registryUrl,
+        raw
+    };
+});
+ipcMain.handle("database-file:create", async (_, payload) => {
+    const registryUrl = payload.location === "Internal" ? normalizeInternalDatabaseName(payload.url) : payload.url.trim();
+    if (!registryUrl) {
+        return null;
+    }
+    const targetPath = databaseFilePath({ location: payload.location, url: registryUrl });
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(targetPath, payload.raw, "utf8");
+    return {
+        handle: {
+            path: targetPath,
+            name: path.basename(targetPath)
+        },
+        registryUrl,
+        raw: payload.raw
+    };
+});
+ipcMain.handle("database-file:delete", async (_, payload) => {
+    const targetPath = databaseFilePath(payload);
+    watchers.get(targetPath)?.close();
+    watchers.delete(targetPath);
+    if (fs.existsSync(targetPath)) {
+        await shell.trashItem(targetPath);
+    }
 });
 ipcMain.handle("path:choose", async () => {
     const result = await dialog.showOpenDialog({

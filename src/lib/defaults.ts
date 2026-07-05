@@ -5,5 +5,6 @@ export const defaultTimeLogFile: TimeLogFile = {
   version: 1,
   fields: { ...BUILTIN_FIELD_DEFINITIONS },
   attributeReferenceGroups: [],
+  sessionPresets: [],
   entries: []
 };

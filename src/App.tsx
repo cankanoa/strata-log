@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Pause, Play, Square } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { formatDuration, formatDurationWithSeconds, getRunningEntry, netDurationMs } from "@/lib/time";
 import { TaskSidebarBrowser } from "@/components/task/task-sidebar-browser";
+import { DatabaseReferenceSyncDialog } from "@/features/database/database-reference-sync-dialog";
+import { getMissingDatabaseReferences, removeDatabaseReferences, type DatabaseReferenceStatus } from "@/lib/database-registry-sync";
 import { getPlatformApi } from "@/lib/platform";
 import { Toaster } from "@/components/ui/sonner";
 import { FocusPage } from "@/pages/focus-page";
@@ -79,6 +81,8 @@ export default function App() {
   );
   const runningEntry = getRunningEntry(file?.entries ?? []);
   const [trayTick, setTrayTick] = useState(0);
+  const [missingDatabaseReferences, setMissingDatabaseReferences] = useState<DatabaseReferenceStatus[]>([]);
+  const startupDatabaseSyncRan = useRef(false);
   const focusRemainingSeconds = focusEndsAt
     ? Math.max(0, Math.ceil((focusEndsAt - Date.now()) / 1000))
     : focusDurationSeconds;
@@ -94,6 +98,26 @@ export default function App() {
     const interval = window.setInterval(() => setTrayTick((value) => value + 1), 1000);
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (startupDatabaseSyncRan.current) {
+      return;
+    }
+    startupDatabaseSyncRan.current = true;
+    void getMissingDatabaseReferences()
+      .then(setMissingDatabaseReferences)
+      .catch((error) => {
+        toast.error("Couldn't sync databases", {
+          description: error instanceof Error ? error.message : "The database registry could not be checked."
+        });
+      });
+  }, []);
+
+  async function removeMissingDatabaseReferences() {
+    await removeDatabaseReferences(missingDatabaseReferences.map((status) => status.entry));
+    setMissingDatabaseReferences([]);
+    toast.success("Removed missing database references.");
+  }
 
   useEffect(() => {
     void getPlatformApi().updateTrayState({
@@ -172,6 +196,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[var(--app-shell-background)]">
+      <DatabaseReferenceSyncDialog
+        open={missingDatabaseReferences.length > 0}
+        missingReferences={missingDatabaseReferences}
+        onKeep={() => setMissingDatabaseReferences([])}
+        onRemove={removeMissingDatabaseReferences}
+      />
       <div className="md:grid md:min-h-screen md:grid-cols-[220px_minmax(0,1fr)]">
         <aside className="sticky top-0 z-10 border-b border-border/70 bg-[var(--app-shell-background)] md:h-screen md:border-b-0 md:border-r">
           <div className="flex min-h-0 flex-col gap-3 p-4 md:h-full md:justify-start">
