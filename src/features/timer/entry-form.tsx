@@ -1,18 +1,21 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { PlayIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { DateTimePicker } from "@/components/forms/date-time-picker";
 import { MetadataFieldsForm } from "@/components/forms/metadata-fields-form";
-import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { emptyMetadata } from "@/lib/metadata";
+import {
+  emptyMetadata,
+  getIntervalMetadataFieldDefinitions,
+  getSessionMetadataFieldDefinitions
+} from "@/lib/metadata";
 import { toIsoWithOffset } from "@/lib/time";
-import type { EntryInterval, FieldDefinition, SessionMetadata, TimeInterval } from "@/lib/types";
+import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, SessionMetadata, TimeInterval } from "@/lib/types";
 
 type EntryFormProps = {
   fields: Record<string, FieldDefinition>;
-  attributeReferenceGroups?: Array<{ label: string; fields: Record<string, FieldDefinition> }>;
+  attributeReferenceGroups?: AttributeReferenceGroup[];
   initialEntry?: EntryInterval | null;
   title?: string;
   submitLabel: string;
@@ -24,59 +27,63 @@ type EntryFormProps = {
 
 type EntryFormState = {
   type: string;
-  intervalMetadata: boolean;
   metadata: SessionMetadata;
   intervals: TimeInterval[];
 };
 
-function emptyInterval(fields: Record<string, FieldDefinition>, intervalMetadata: boolean, seed?: SessionMetadata): TimeInterval {
+function scopeGroups(groups: AttributeReferenceGroup[], interval: boolean): AttributeReferenceGroup[] {
+  return groups.map((group) => ({
+    ...group,
+    fields: Object.fromEntries(Object.entries(group.fields).filter(([, field]) => Boolean(field.interval) === interval))
+  }));
+}
+
+function emptyInterval(fields: Record<string, FieldDefinition>, seed?: SessionMetadata): TimeInterval {
   return {
     id: uuidv4(),
     start: "",
     end: "",
-    metadata: intervalMetadata ? { ...emptyMetadata(fields), ...(seed ?? {}) } : {}
+    metadata: { ...emptyMetadata(fields), ...(seed ?? {}) }
   };
 }
 
 function buildInitialIntervals(
-  fields: Record<string, FieldDefinition>,
-  intervalMetadata: boolean,
+  intervalFields: Record<string, FieldDefinition>,
   initialEntry?: EntryInterval | null
 ): TimeInterval[] {
   if (!initialEntry?.intervals?.length) {
-    return [emptyInterval(fields, intervalMetadata)];
+    return [emptyInterval(intervalFields)];
   }
 
   return initialEntry.intervals.map((interval) => ({
     ...interval,
     id: interval.id ?? uuidv4(),
-    metadata: intervalMetadata
-      ? {
-          ...emptyMetadata(fields),
-          ...(interval.metadata ?? {})
-        }
-      : {}
+    metadata: {
+      ...emptyMetadata(intervalFields),
+      ...(interval.metadata ?? {})
+    }
   }));
 }
 
-function buildInitialState(fields: Record<string, FieldDefinition>, initialEntry?: EntryInterval | null): EntryFormState {
-  const intervalMetadata = Boolean(initialEntry?.intervalMetadata);
+function buildInitialState(
+  sessionFields: Record<string, FieldDefinition>,
+  intervalFields: Record<string, FieldDefinition>,
+  initialEntry?: EntryInterval | null
+): EntryFormState {
   return {
     type: initialEntry?.type ?? "interval",
-    intervalMetadata,
-    metadata: intervalMetadata ? {} : { ...emptyMetadata(fields), ...(initialEntry?.metadata ?? {}) },
-    intervals: buildInitialIntervals(fields, intervalMetadata, initialEntry)
+    metadata: { ...emptyMetadata(sessionFields), ...(initialEntry?.metadata ?? {}) },
+    intervals: buildInitialIntervals(intervalFields, initialEntry)
   };
 }
 
 function submittedEntry(state: EntryFormState): Omit<EntryInterval, "id"> {
   return {
     type: state.type,
-    intervalMetadata: state.intervalMetadata,
-    metadata: state.intervalMetadata ? {} : state.metadata,
+    metadata: state.metadata,
     intervals: state.intervals.map((interval) => ({
       ...interval,
-      metadata: state.intervalMetadata ? interval.metadata ?? {} : {}
+      metadata: interval.metadata ?? {}
     }))
   };
 }
@@ -92,11 +99,15 @@ export function EntryForm({
   chrome = "card",
   footerStart
 }: EntryFormProps) {
-  const [state, setState] = useState<EntryFormState>(() => buildInitialState(fields, initialEntry));
+  const sessionFields = useMemo(() => getSessionMetadataFieldDefinitions(fields), [fields]);
+  const intervalFields = useMemo(() => getIntervalMetadataFieldDefinitions(fields), [fields]);
+  const sessionGroups = useMemo(() => scopeGroups(attributeReferenceGroups, false), [attributeReferenceGroups]);
+  const intervalGroups = useMemo(() => scopeGroups(attributeReferenceGroups, true), [attributeReferenceGroups]);
+  const [state, setState] = useState<EntryFormState>(() => buildInitialState(sessionFields, intervalFields, initialEntry));
 
   useEffect(() => {
-    setState(buildInitialState(fields, initialEntry));
-  }, [fields, initialEntry]);
+    setState(buildInitialState(sessionFields, intervalFields, initialEntry));
+  }, [intervalFields, initialEntry, sessionFields]);
 
   function updateInterval(index: number, nextInterval: Partial<TimeInterval>) {
     setState((current) => ({
@@ -113,7 +124,7 @@ export function EntryForm({
       type: "interval",
       intervals: [
         ...current.intervals,
-        emptyInterval(fields, current.intervalMetadata, current.intervalMetadata ? current.intervals.at(-1)?.metadata : undefined)
+        emptyInterval(intervalFields, current.intervals.at(-1)?.metadata)
       ]
     }));
   }
@@ -123,7 +134,7 @@ export function EntryForm({
       const intervals =
         current.intervals.length > 0
           ? [...current.intervals]
-          : [emptyInterval(fields, current.intervalMetadata, current.intervalMetadata ? current.metadata : undefined)];
+          : [emptyInterval(intervalFields)];
       const lastIndex = intervals.length - 1;
       intervals[lastIndex] = {
         ...intervals[lastIndex],
@@ -140,70 +151,54 @@ export function EntryForm({
   function startNewIntervalNow() {
     const now = toIsoWithOffset(new Date());
     setState((current) => ({
-        ...current,
-        type: "running",
-        intervals: [
-          ...current.intervals.map((interval) => ({
-            ...interval,
-            end: interval.end ?? interval.start
-          })),
-          {
-            id: uuidv4(),
-            start: now,
-            end: undefined,
-            metadata: current.intervalMetadata ? { ...emptyMetadata(fields), ...(current.intervals.at(-1)?.metadata ?? {}) } : {}
-          }
-        ]
-      }));
-  }
-
-  function setIntervalMetadataMode(intervalMetadata: boolean) {
-    setState((current) => ({
       ...current,
-      intervalMetadata,
-      metadata: intervalMetadata ? {} : { ...emptyMetadata(fields), ...(current.metadata ?? {}), ...(current.intervals[0]?.metadata ?? {}) },
-      intervals: current.intervals.map((interval) => ({
-        ...interval,
-        metadata: intervalMetadata ? { ...emptyMetadata(fields), ...(current.metadata ?? {}), ...(interval.metadata ?? {}) } : {}
-      }))
+      type: "running",
+      intervals: [
+        ...current.intervals.map((interval) => ({
+          ...interval,
+          end: interval.end ?? interval.start
+        })),
+        {
+          id: uuidv4(),
+          start: now,
+          end: undefined,
+          metadata: { ...emptyMetadata(intervalFields), ...(current.intervals.at(-1)?.metadata ?? {}) }
+        }
+      ]
     }));
   }
 
   const content = (
     <div className="grid gap-6">
       <div className="grid gap-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <label className="flex items-center gap-3 text-sm font-medium text-muted-foreground">
-            <span>Interval metadata</span>
-            <Switch checked={state.intervalMetadata} onCheckedChange={setIntervalMetadataMode} />
-          </label>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={addManualInterval}>
-              <PlusIcon className="size-4" />
-              Add manual interval
-            </Button>
-            <Button variant="outline" size="sm" onClick={continueInterval}>
-              Continue interval
-            </Button>
-            <Button variant="outline" size="sm" onClick={startNewIntervalNow}>
-              <PlayIcon className="size-4" />
-              Start new interval now
-            </Button>
-          </div>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={addManualInterval}>
+            <PlusIcon className="size-4" />
+            Add manual interval
+          </Button>
+          <Button variant="outline" size="sm" onClick={continueInterval}>
+            Continue interval
+          </Button>
+          <Button variant="outline" size="sm" onClick={startNewIntervalNow}>
+            <PlayIcon className="size-4" />
+            Start new interval now
+          </Button>
         </div>
 
-        <div className="grid gap-3">
-          {!state.intervalMetadata ? (
-            <div className="grid gap-4 rounded-xl border border-border/70 bg-background/70 p-4">
-              <MetadataFieldsForm
-                fields={fields}
-                attributeReferenceGroups={attributeReferenceGroups}
-                value={state.metadata}
-                onChange={(metadata) => setState((current) => ({ ...current, metadata }))}
-              />
-            </div>
-          ) : null}
+        <section className="grid gap-3">
+          <h3 className="text-sm font-medium text-muted-foreground">Session Fields</h3>
+          <div className="grid gap-4 rounded-xl border border-border/70 bg-background/70 p-4">
+            <MetadataFieldsForm
+              fields={sessionFields}
+              attributeReferenceGroups={sessionGroups}
+              value={state.metadata}
+              onChange={(metadata) => setState((current) => ({ ...current, metadata }))}
+            />
+          </div>
+        </section>
 
+        <section className="grid gap-3">
+          <h3 className="text-sm font-medium text-muted-foreground">Interval Fields</h3>
           {state.intervals.map((interval, index) => (
             <div className="grid gap-4 rounded-xl border border-border/70 bg-background/70 p-4" key={interval.id ?? index}>
               <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto]">
@@ -235,17 +230,15 @@ export function EntryForm({
                 </Button>
               </div>
 
-              {state.intervalMetadata ? (
-                <MetadataFieldsForm
-                  fields={fields}
-                  attributeReferenceGroups={attributeReferenceGroups}
-                  value={interval.metadata ?? {}}
-                  onChange={(metadata) => updateInterval(index, { metadata: metadata as SessionMetadata })}
-                />
-              ) : null}
+              <MetadataFieldsForm
+                fields={intervalFields}
+                attributeReferenceGroups={intervalGroups}
+                value={interval.metadata ?? {}}
+                onChange={(metadata) => updateInterval(index, { metadata: metadata as SessionMetadata })}
+              />
             </div>
           ))}
-        </div>
+        </section>
       </div>
 
       <div className="flex flex-wrap justify-end gap-2">
@@ -255,9 +248,7 @@ export function EntryForm({
             Cancel
           </Button>
         ) : null}
-        <Button
-          onClick={() => onSubmit(submittedEntry(state))}
-        >
+        <Button onClick={() => onSubmit(submittedEntry(state))}>
           {submitLabel}
         </Button>
       </div>

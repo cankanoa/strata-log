@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-electron/
+data/
 *.tsbuildinfo
 capacitor.config.js
 capacitor.config.d.ts

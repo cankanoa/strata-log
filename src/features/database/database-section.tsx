@@ -3,6 +3,7 @@ import { Circle, CircleCheck, CircleMinus, Download, FilePlus, Link, Pencil, Plu
 import { toast } from "sonner";
 import { AttributeReferenceOptionsDialog } from "@/features/database/attribute-reference-options-dialog";
 import { DatabaseReferenceSyncDialog } from "@/features/database/database-reference-sync-dialog";
+import { FieldOptionValueResolutionDialog } from "@/features/database/field-option-value-resolution-dialog";
 import { FieldOptionsDialog } from "@/features/database/field-options-dialog";
 import { MetadataValueDialog } from "@/features/database/metadata-value-dialog";
 import { getFieldOptionsWithAttributeReferences } from "@/lib/attribute-references";
@@ -21,11 +22,16 @@ import {
   serializeFieldOption,
   supportsOptions
 } from "@/lib/metadata";
-import { TimeLogDatabase } from "@/lib/time-log-database";
+import {
+  TimeLogDatabase,
+  type FieldOptionValueChange,
+  type FieldOptionValueResolution
+} from "@/lib/time-log-database";
 import {
   createDatabaseRegistryEntry,
   parseDatabaseRegistry,
   serializeDatabaseRegistry,
+  setActiveDatabaseEntry,
   type DatabaseLocation,
   type DatabaseRegistryEntry
 } from "@/lib/database-registry";
@@ -74,7 +80,7 @@ type OptionsDialogState =
       description: string;
       field: FieldDefinition;
       initialOptions: string[];
-      onSave: (options: string[]) => Promise<void> | void;
+      onSave: (options: string[]) => Promise<boolean | void> | boolean | void;
     }
   | null;
 
@@ -97,6 +103,7 @@ type FieldRowHandlers = {
   onRename: (name: string) => void;
   onTypeChange: (name: string, field: FieldDefinition, type: FieldDefinition["type"]) => void;
   onSelectionChange: (name: string, field: FieldDefinition, selection: NonNullable<FieldDefinition["selection"]>) => void;
+  onIntervalChange: (name: string, field: FieldDefinition, interval: boolean) => void;
   onRequiredChange: (name: string, field: FieldDefinition, required: boolean) => void;
   onVisibilityChange: (name: string, field: FieldDefinition, visibility: NonNullable<FieldDefinition["visibility"]>) => void;
   onDefaultEdit: (name: string, field: FieldDefinition) => void;
@@ -150,6 +157,7 @@ function FieldCreationRow({
   const [typeDraft, setTypeDraft] = useState<FieldDefinition["type"]>("string");
   const [selectionDraft, setSelectionDraft] = useState<NonNullable<FieldDefinition["selection"]>>("single");
   const [optionsDraft, setOptionsDraft] = useState<string[]>([]);
+  const [intervalDraft, setIntervalDraft] = useState(false);
   const [requiredDraft, setRequiredDraft] = useState(false);
   const [visibilityDraft, setVisibilityDraft] = useState<NonNullable<FieldDefinition["visibility"]>>("editable");
   const [defaultDraft, setDefaultDraft] = useState<MetadataValue>(undefined);
@@ -158,6 +166,7 @@ function FieldCreationRow({
   const draftField: FieldDefinition = {
     type: typeDraft,
     selection: selectionDraft,
+    interval: intervalDraft,
     required: requiredDraft,
     visibility: visibilityDraft,
     default: defaultDraft,
@@ -221,6 +230,9 @@ function FieldCreationRow({
         </Select>
       </TableCell>
       <TableCell>
+        <Switch checked={intervalDraft} onCheckedChange={setIntervalDraft} />
+      </TableCell>
+      <TableCell>
         <Switch checked={requiredDraft} onCheckedChange={setRequiredDraft} />
       </TableCell>
       <TableCell>
@@ -275,6 +287,7 @@ function FieldCreationRow({
             setTypeDraft("string");
             setSelectionDraft("single");
             setOptionsDraft([]);
+            setIntervalDraft(false);
             setRequiredDraft(false);
             setVisibilityDraft("editable");
             setDefaultDraft(undefined);
@@ -343,6 +356,9 @@ function FieldRows({
             ))}
           </SelectContent>
         </Select>
+      </TableCell>
+      <TableCell>
+        <Switch checked={Boolean(field.interval)} onCheckedChange={(checked) => handlers.onIntervalChange(name, field, checked)} />
       </TableCell>
       <TableCell>
         <Switch checked={Boolean(field.required)} onCheckedChange={(checked) => handlers.onRequiredChange(name, field, checked)} />
@@ -433,6 +449,11 @@ export function DatabaseSection() {
   const [editDialog, setEditDialog] = useState<EditDialogState>(null);
   const [valueDialog, setValueDialog] = useState<ValueDialogState>(null);
   const [optionsDialog, setOptionsDialog] = useState<OptionsDialogState>(null);
+  const [pendingOptionResolution, setPendingOptionResolution] = useState<{
+    name: string;
+    nextField: FieldDefinition;
+    changes: FieldOptionValueChange[];
+  } | null>(null);
   const [attributeReferenceOptionsDialog, setAttributeReferenceOptionsDialog] = useState<AttributeReferenceOptionsDialogState>(null);
   const [databaseEntries, setDatabaseEntries] = useState<DatabaseRegistryEntry[]>([]);
   const [databaseFileInfo, setDatabaseFileInfo] = useState<Record<string, DatabaseFileInfo>>({});
@@ -671,8 +692,8 @@ export function DatabaseSection() {
       return;
     }
     const entry = createDatabaseRegistryEntry(databaseDraftLocation, created.registryUrl);
-    await saveDatabaseEntries([...databaseEntries, entry]);
-    await loadDatabaseFile({ location: entry.location, url: entry.url });
+    const loaded = await loadDatabaseFile({ location: entry.location, url: entry.url });
+    await saveDatabaseEntries(setActiveDatabaseEntry([...databaseEntries, entry], loaded ? entry.id : null));
     setDatabaseDraftUrl("");
   }
 
@@ -685,18 +706,21 @@ export function DatabaseSection() {
   }
 
   function isActiveManagedDatabase(entry: DatabaseRegistryEntry) {
-    return Boolean(fileHandle?.path && databaseFileInfo[entry.id]?.path === fileHandle.path);
+    return Boolean(entry.activeDatabase && fileHandle?.path && databaseFileInfo[entry.id]?.path === fileHandle.path);
   }
 
   async function loadManagedDatabase(entry: DatabaseRegistryEntry) {
     if (isActiveManagedDatabase(entry)) {
       unloadFile();
+      await saveDatabaseEntries(setActiveDatabaseEntry(databaseEntries, null));
       return;
     }
     const loaded = await loadDatabaseFile({ location: entry.location, url: entry.url });
     if (!loaded) {
       showDatabaseError("Couldn't load database", `The database "${entry.url}" could not be loaded.`);
+      return;
     }
+    await saveDatabaseEntries(setActiveDatabaseEntry(databaseEntries, entry.id));
   }
 
   async function deleteManagedDatabase(entry: DatabaseRegistryEntry) {
@@ -744,7 +768,11 @@ export function DatabaseSection() {
     });
   }
 
-  function openOptionsEditor(save: (options: string[]) => Promise<void> | void, field: FieldDefinition, title: string) {
+  function openOptionsEditor(
+    save: (options: string[]) => Promise<boolean | void> | boolean | void,
+    field: FieldDefinition,
+    title: string
+  ) {
     openOptionsDialog({
       title,
       description: "Set the display label and saved value for each option.",
@@ -752,6 +780,38 @@ export function DatabaseSection() {
       initialOptions: field.options ?? [],
       onSave: save
     });
+  }
+
+  async function saveRegularFieldOptions(name: string, field: FieldDefinition, options: string[]) {
+    const nextField = { ...field, options };
+    const changes = file ? TimeLogDatabase.getFieldOptionValueChanges(file, name, nextField) : [];
+    if (changes.length > 0) {
+      setPendingOptionResolution({ name, nextField, changes });
+      return false;
+    }
+    const saved = await updateField(name, nextField);
+    if (saved) {
+      setOptionsDialog(null);
+    }
+    return saved;
+  }
+
+  async function resolveOptionValues(resolution: FieldOptionValueResolution) {
+    if (!pendingOptionResolution) {
+      return;
+    }
+    const saved = await updateField(
+      pendingOptionResolution.name,
+      pendingOptionResolution.nextField,
+      {
+        changes: pendingOptionResolution.changes,
+        resolution
+      }
+    );
+    if (saved) {
+      setPendingOptionResolution(null);
+      setOptionsDialog(null);
+    }
   }
 
   async function createRegularField(name: string, field: FieldDefinition) {
@@ -847,6 +907,7 @@ export function DatabaseSection() {
         visibility: selection === "single" && normalizeFieldVisibility(field) === "addable" ? "editable" : field.visibility,
         options: selection === "single" ? undefined : field.options
       })),
+    onIntervalChange: (name, field, interval) => void updateField(name, { ...field, interval }),
     onRequiredChange: (name, field, required) => {
       if (!required) {
         void updateField(name, { ...field, required: false });
@@ -885,9 +946,7 @@ export function DatabaseSection() {
         openAttributeReferenceFieldEditor(name, field);
         return;
       }
-      openOptionsEditor(async (options) => {
-        await updateField(name, { ...field, options });
-      }, field, `Options for ${name}`);
+      openOptionsEditor((options) => saveRegularFieldOptions(name, field, options), field, `Options for ${name}`);
     },
     onDelete: (name) => void deleteField(name)
   };
@@ -914,6 +973,7 @@ export function DatabaseSection() {
             options: selection === "single" ? undefined : field.options
           })
         ),
+      onIntervalChange: (name, field, interval) => void updateAttributeReferenceField(group.label, name, { ...field, interval }),
       onRequiredChange: (name, field, required) => void updateAttributeReferenceField(group.label, name, { ...field, required }),
       onVisibilityChange: (name, field, visibility) =>
         void updateAttributeReferenceField(group.label, name, {
@@ -940,7 +1000,7 @@ export function DatabaseSection() {
     };
   }
 
-  function ManagedDatabasesTable() {
+  function renderManagedDatabasesTable() {
     return (
       <Table>
         <TableHeader>
@@ -1100,7 +1160,7 @@ export function DatabaseSection() {
           </div>
         </CardHeader>
         <CardContent>
-          <ManagedDatabasesTable />
+          {renderManagedDatabasesTable()}
         </CardContent>
       </Card>
 
@@ -1116,6 +1176,7 @@ export function DatabaseSection() {
                 <TableHead>Name</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Selection</TableHead>
+                <TableHead>Interval</TableHead>
                 <TableHead>Required</TableHead>
                 <TableHead>Visibility</TableHead>
                 <TableHead>Default</TableHead>
@@ -1210,6 +1271,7 @@ export function DatabaseSection() {
                       <TableHead>Field</TableHead>
                       <TableHead>Type</TableHead>
                       <TableHead>Selection</TableHead>
+                      <TableHead>Interval</TableHead>
                       <TableHead>Required</TableHead>
                       <TableHead>Visibility</TableHead>
                       <TableHead>Default</TableHead>
@@ -1334,8 +1396,18 @@ export function DatabaseSection() {
           initialOptions={optionsDialog.initialOptions}
           onOpenChange={(open) => !open && setOptionsDialog(null)}
           onSave={async (options) => {
-            await optionsDialog.onSave(options);
+            return optionsDialog.onSave(options);
           }}
+        />
+      ) : null}
+
+      {pendingOptionResolution ? (
+        <FieldOptionValueResolutionDialog
+          open
+          fieldName={pendingOptionResolution.name}
+          changes={pendingOptionResolution.changes}
+          onOpenChange={(open) => !open && setPendingOptionResolution(null)}
+          onResolve={resolveOptionValues}
         />
       ) : null}
 

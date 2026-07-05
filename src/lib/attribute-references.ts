@@ -2,7 +2,9 @@ import {
   applyMetadataDefaults,
   getFieldSelection,
   getFieldOptions,
+  getIntervalMetadataFieldDefinitions,
   getMetadataFields,
+  getSessionMetadataFieldDefinitions,
   normalizeMetadataValue,
   serializeFieldOption,
   type ParsedFieldOption
@@ -168,8 +170,13 @@ export function resolveEntryMetadata(file: TimeLogFile | null | undefined, entry
     return {};
   }
 
-  return resolveAttributeReferenceMetadata(
-    file,
-    entry.intervalMetadata ? (entry.intervals?.at(-1)?.metadata ?? {}) : (entry.metadata ?? {})
-  );
+  return resolveAttributeReferenceMetadata(file, entry.metadata ?? {});
+}
+
+export function getSessionFields(file: TimeLogFile | null | undefined): Record<string, FieldDefinition> {
+  return getSessionMetadataFieldDefinitions(getResolvedMetadataFields(file));
+}
+
+export function getIntervalFields(file: TimeLogFile | null | undefined): Record<string, FieldDefinition> {
+  return getIntervalMetadataFieldDefinitions(getResolvedMetadataFields(file));
 }

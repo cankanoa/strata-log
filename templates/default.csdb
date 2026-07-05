@@ -17,6 +17,7 @@ columns:
   name: text
   type: text
   selection: text
+  interval: boolean
   required: boolean
   visibility: text
   options_json: text
@@ -28,6 +29,7 @@ required:
   - name
   - type
   - selection
+  - interval
   - required
   - visibility
   - scope
@@ -35,17 +37,16 @@ primary_key:
   columns: [id]
 
 --- table:fields:data
-id,name,type,selection,required,visibility,options_json,default_json,scope,attribute_reference_group_label
-00000000-0000-4000-8000-000000000001,id,uuid,single,false,viewable,[],null,regular,
-00000000-0000-4000-8000-000000000002,type,string,single,false,viewable,[],null,regular,
-00000000-0000-4000-8000-000000000003,start_time,datetime,single,false,viewable,[],null,regular,
-00000000-0000-4000-8000-000000000004,end_time,datetime,single,false,viewable,[],null,regular,
-00000000-0000-4000-8000-000000000005,session_id,uuid,single,false,viewable,[],null,regular,
-00000000-0000-4000-8000-000000000006,interval_metadata,bool,single,false,viewable,[],false,regular,
-00000000-0000-4000-8000-000000000007,Project,string,single,false,editable,[],null,regular,
-00000000-0000-4000-8000-000000000008,Hourly Pay,string,single,false,editable,[],null,regular,
-00000000-0000-4000-8000-000000000009,Job,string,select,false,editable,"[""Client Work"",""Internal"",""Admin""]",null,regular,
-00000000-0000-4000-8000-00000000000a,Activity,string,single,false,editable,[],null,regular,
+id,name,type,selection,interval,required,visibility,options_json,default_json,scope,attribute_reference_group_label
+00000000-0000-4000-8000-000000000001,id,uuid,single,false,false,viewable,[],null,regular,
+00000000-0000-4000-8000-000000000002,type,string,single,false,false,viewable,[],null,regular,
+00000000-0000-4000-8000-000000000003,start_time,datetime,single,false,false,viewable,[],null,regular,
+00000000-0000-4000-8000-000000000004,end_time,datetime,single,false,false,viewable,[],null,regular,
+00000000-0000-4000-8000-000000000005,session_id,uuid,single,false,false,viewable,[],null,regular,
+00000000-0000-4000-8000-000000000007,Project,string,single,false,false,editable,[],null,regular,
+00000000-0000-4000-8000-000000000008,Hourly Pay,string,single,false,false,editable,[],null,regular,
+00000000-0000-4000-8000-000000000009,Job,string,select,false,false,editable,"[""Client Work"",""Internal"",""Admin""]",null,regular,
+00000000-0000-4000-8000-00000000000a,Activity,string,single,false,false,editable,[],null,regular,
 
 --- table:attribute_reference_groups:schema
 name: attribute_reference_groups
@@ -64,16 +65,14 @@ name: sessions
 columns:
   id: text
   type: text
-  interval_metadata: boolean
 required:
   - id
   - type
-  - interval_metadata
 primary_key:
   columns: [id]
 
 --- table:sessions:data
-id,type,interval_metadata
+id,type
 
 --- table:session_presets:schema
 name: session_presets

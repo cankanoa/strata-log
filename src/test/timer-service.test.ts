@@ -52,7 +52,6 @@ describe("CSDB services", () => {
         {
           id: "550e8400-e29b-41d4-a716-446655440000",
           type: "interval",
-          intervalMetadata: false,
           metadata: { Project: "Strata" },
           intervals: [
             {
@@ -116,11 +115,14 @@ describe("CSDB services", () => {
   it("rejects invalid select values", () => {
     const invalid: TimeLogFile = {
       ...baseFile,
+      fields: {
+        ...baseFile.fields,
+        Job: { ...baseFile.fields.Job!, interval: true }
+      },
       entries: [
         {
           id: "550e8400-e29b-41d4-a716-446655440000",
           type: "interval",
-          intervalMetadata: true,
           metadata: {},
           intervals: [
             {
@@ -138,6 +140,55 @@ describe("CSDB services", () => {
     expect(result.errors[0]).toContain("not a valid option");
   });
 
+  it("resolves used option value edits before validation", () => {
+    const file: TimeLogFile = {
+      ...baseFile,
+      fields: {
+        ...baseFile.fields,
+        Tags: {
+          type: "string",
+          selection: "multiselect",
+          visibility: "editable",
+          options: ["Urgent", "Paid"]
+        }
+      },
+      entries: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440000",
+          type: "interval",
+          metadata: {
+            Job: "Client Work",
+            Tags: ["Urgent", "Paid"]
+          },
+          intervals: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440010",
+              start: "2026-05-24T09:00:00-10:00",
+              end: "2026-05-24T10:00:00-10:00",
+              metadata: {}
+            }
+          ]
+        }
+      ]
+    };
+
+    const nextJobField = { ...file.fields.Job!, options: ["Client", "Internal"] };
+    const jobChanges = TimeLogDatabase.getFieldOptionValueChanges(file, "Job", nextJobField);
+    const updatedJobValues = TimeLogDatabase.resolveFieldOptionValues(file, "Job", nextJobField, jobChanges, "update");
+    const updatedJobField = TimeLogDatabase.updateField(updatedJobValues, "Job", nextJobField);
+
+    expect(validateFile(updatedJobField).errors).toEqual([]);
+    expect(updatedJobField.entries[0]?.metadata?.Job).toBe("Client");
+
+    const nextTagsField = { ...file.fields.Tags!, options: ["Paid"] };
+    const tagChanges = TimeLogDatabase.getFieldOptionValueChanges(file, "Tags", nextTagsField);
+    const removedTagValues = TimeLogDatabase.resolveFieldOptionValues(file, "Tags", nextTagsField, tagChanges, "remove");
+    const updatedTagsField = TimeLogDatabase.updateField(removedTagValues, "Tags", nextTagsField);
+
+    expect(validateFile(updatedTagsField).errors).toEqual([]);
+    expect(updatedTagsField.entries[0]?.metadata?.Tags).toEqual(["Paid"]);
+  });
+
   it("renames a metadata name across the file", () => {
     const file: TimeLogFile = {
       ...baseFile,
@@ -145,7 +196,6 @@ describe("CSDB services", () => {
         {
           id: "550e8400-e29b-41d4-a716-446655440000",
           type: "interval",
-          intervalMetadata: false,
           metadata: { Project: "Strata" },
           intervals: [
             {
@@ -172,7 +222,6 @@ describe("CSDB services", () => {
         {
           id: "550e8400-e29b-41d4-a716-446655440000",
           type: "interval",
-          intervalMetadata: true,
           metadata: {},
           intervals: [
             {
@@ -276,7 +325,6 @@ describe("CSDB services", () => {
         {
           id: "550e8400-e29b-41d4-a716-446655440000",
           type: "interval",
-          intervalMetadata: false,
           metadata: { Project: "Strata" },
           intervals: [
             {
@@ -310,7 +358,6 @@ describe("CSDB services", () => {
         {
           id: "550e8400-e29b-41d4-a716-446655440000",
           type: "interval",
-          intervalMetadata: false,
           metadata: { Project: "Client Alpha" },
           intervals: [
             {
@@ -338,13 +385,12 @@ describe("CSDB services", () => {
       ...baseFile,
       fields: {
         ...baseFile.fields,
-        Job: { type: "string", selection: "multiselect", visibility: "editable", options: ["Client Work", "Internal"] }
+        Job: { type: "string", selection: "multiselect", visibility: "editable", interval: true, options: ["Client Work", "Internal"] }
       },
       entries: [
         {
           id: "550e8400-e29b-41d4-a716-446655440000",
           type: "interval",
-          intervalMetadata: true,
           metadata: {},
           intervals: [
             {
@@ -390,7 +436,6 @@ describe("CSDB services", () => {
         {
           id: "550e8400-e29b-41d4-a716-446655440000",
           type: "interval",
-          intervalMetadata: false,
           metadata: {},
           intervals: [
             {

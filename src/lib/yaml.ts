@@ -2,10 +2,11 @@ import { v4 as uuidv4 } from "uuid";
 import { CSDBDatabase, serializeCSDB, type Row, type TableSchema } from "@/lib/csdb";
 import {
   ensureBuiltinFields,
+  getIntervalMetadataFields,
+  getSessionMetadataFields,
   getFieldSelection,
   normalizeFieldVisibility,
   getFieldOptions,
-  getMetadataFields,
   hasMetadataValue,
   normalizeFieldDefinition,
   parseCellValue,
@@ -30,6 +31,7 @@ const FIELD_TABLE: TableSchema = {
     name: "text",
     type: "text",
     selection: "text",
+    interval: "boolean",
     required: "boolean",
     visibility: "text",
     options_json: "text",
@@ -37,7 +39,7 @@ const FIELD_TABLE: TableSchema = {
     scope: "text",
     attribute_reference_group_label: "text"
   },
-  required: ["id", "name", "type", "selection", "required", "visibility", "scope"],
+  required: ["id", "name", "type", "selection", "interval", "required", "visibility", "scope"],
   primary_key: { columns: ["id"] }
 };
 
@@ -54,10 +56,9 @@ const SESSION_TABLE: TableSchema = {
   name: "sessions",
   columns: {
     id: "text",
-    type: "text",
-    interval_metadata: "boolean"
+    type: "text"
   },
-  required: ["id", "type", "interval_metadata"],
+  required: ["id", "type"],
   primary_key: { columns: ["id"] }
 };
 
@@ -121,7 +122,7 @@ function createDatabase(): CSDBDatabase {
 }
 
 function tableRows(db: CSDBDatabase, tableName: string): Row[] {
-  return db.document.tables.get(tableName)?.rows ?? [];
+  return db.table(tableName).all();
 }
 
 function missingSchemaTables(db: CSDBDatabase): string[] {
@@ -217,6 +218,7 @@ function parseFieldRows(db: CSDBDatabase): ParsedFieldRow[] {
       id: asString(row.id),
       type: asString(row.type) as FieldDefinition["type"],
       selection: asString(row.selection) as FieldDefinition["selection"],
+      interval: asBoolean(row.interval),
       required: asBoolean(row.required),
       visibility: asString(row.visibility) as FieldDefinition["visibility"],
       options: (() => {
@@ -275,18 +277,16 @@ function parseEntries(db: CSDBDatabase, fields: Record<string, FieldDefinition>)
     metadataRows.filter((row) => asString(row.session_id).length > 0 && asString(row.interval_id).length === 0),
     (row) => `${asString(row.session_id)}::${asString(row.field_name)}`
   );
-  const intervalMetadataRowsByKey = groupRowsBy(
+  const intervalValueRowsByKey = groupRowsBy(
     metadataRows.filter((row) => asString(row.interval_id).length > 0),
     (row) => `${asString(row.interval_id)}::${asString(row.field_name)}`
   );
 
   return sessionRows.map((sessionRow) => {
     const sessionId = asString(sessionRow.id);
-    const intervalMetadata = asBoolean(sessionRow.interval_metadata);
     const entry: EntryInterval = {
       id: sessionId,
       type: asString(sessionRow.type) || "interval",
-      intervalMetadata,
       metadata: {},
       intervals: []
     };
@@ -301,28 +301,24 @@ function parseEntries(db: CSDBDatabase, fields: Record<string, FieldDefinition>)
         metadata: {}
       };
 
-      if (intervalMetadata) {
-        getMetadataFields(fields).forEach(([fieldName, field]) => {
-          const fieldRows = intervalMetadataRowsByKey.get(`${intervalId}::${fieldName}`) ?? [];
-          const value = readValueGroup(field, fieldRows);
-          if (hasMetadataValue(value)) {
-            interval.metadata![fieldName] = value;
-          }
-        });
-      }
+      getIntervalMetadataFields(fields).forEach(([fieldName, field]) => {
+        const fieldRows = intervalValueRowsByKey.get(`${intervalId}::${fieldName}`) ?? [];
+        const value = readValueGroup(field, fieldRows);
+        if (hasMetadataValue(value)) {
+          interval.metadata![fieldName] = value;
+        }
+      });
 
       return interval;
     });
 
-    if (!intervalMetadata) {
-      getMetadataFields(fields).forEach(([fieldName, field]) => {
-        const fieldRows = sessionMetadataRowsByKey.get(`${sessionId}::${fieldName}`) ?? [];
-        const value = readValueGroup(field, fieldRows);
-        if (hasMetadataValue(value)) {
-          entry.metadata![fieldName] = value;
-        }
-      });
-    }
+    getSessionMetadataFields(fields).forEach(([fieldName, field]) => {
+      const fieldRows = sessionMetadataRowsByKey.get(`${sessionId}::${fieldName}`) ?? [];
+      const value = readValueGroup(field, fieldRows);
+      if (hasMetadataValue(value)) {
+        entry.metadata![fieldName] = value;
+      }
+    });
 
     return entry;
   });
@@ -378,6 +374,7 @@ export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
       name,
       type: field.type,
       selection: getFieldSelection(field),
+      interval: Boolean(field.interval),
       required: Boolean(field.required),
       visibility: normalizeFieldVisibility(field),
       options_json: serializeJsonValue(
@@ -401,28 +398,23 @@ export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
   });
 
   normalizedFile.entries.forEach((entry) => {
-    const intervalMetadata = Boolean(entry.intervalMetadata);
-
     sessionRows.push({
       id: entry.id,
-      type: entry.type ?? "interval",
-      interval_metadata: intervalMetadata
+      type: entry.type ?? "interval"
     });
 
-    if (!intervalMetadata) {
-      getMetadataFields(normalizedFile.fields).forEach(([fieldName, field]) => {
-        appendValueRows(
-          metadataRows,
-          {
-            session_id: entry.id,
-            interval_id: null,
-            field_name: fieldName
-          },
-          field,
-          entry.metadata?.[fieldName]
-        );
-      });
-    }
+    getSessionMetadataFields(normalizedFile.fields).forEach(([fieldName, field]) => {
+      appendValueRows(
+        metadataRows,
+        {
+          session_id: entry.id,
+          interval_id: null,
+          field_name: fieldName
+        },
+        field,
+        entry.metadata?.[fieldName]
+      );
+    });
 
     (entry.intervals ?? []).forEach((interval, index) => {
       const intervalId = interval.id ?? `${entry.id}-${index}`;
@@ -433,20 +425,18 @@ export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
         end_time: interval.end ?? null
       });
 
-      if (intervalMetadata) {
-        getMetadataFields(normalizedFile.fields).forEach(([fieldName, field]) => {
-          appendValueRows(
-            metadataRows,
-            {
-              session_id: null,
-              interval_id: intervalId,
-              field_name: fieldName
-            },
-            field,
-            interval.metadata?.[fieldName]
-          );
-        });
-      }
+      getIntervalMetadataFields(normalizedFile.fields).forEach(([fieldName, field]) => {
+        appendValueRows(
+          metadataRows,
+          {
+            session_id: null,
+            interval_id: intervalId,
+            field_name: fieldName
+          },
+          field,
+          interval.metadata?.[fieldName]
+        );
+      });
     });
   });
 

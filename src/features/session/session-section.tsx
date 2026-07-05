@@ -4,6 +4,7 @@ import { Play, Square } from "lucide-react";
 import { DateTimePicker } from "@/components/forms/date-time-picker";
 import { MetadataFieldsForm } from "@/components/forms/metadata-fields-form";
 import { AttributeReferenceOptionsDialog } from "@/features/database/attribute-reference-options-dialog";
+import { FieldOptionValueResolutionDialog } from "@/features/database/field-option-value-resolution-dialog";
 import { FieldOptionsDialog } from "@/features/database/field-options-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,11 +17,25 @@ import {
 import { SessionPresetsMenu } from "@/features/session/session-presets-menu";
 import { EntryForm } from "@/features/timer/entry-form";
 import { getFieldOptionsWithAttributeReferences } from "@/lib/attribute-references";
-import { emptyMetadata, parseFieldOption, serializeFieldOption } from "@/lib/metadata";
+import {
+  emptyMetadata,
+  getIntervalMetadataFieldDefinitions,
+  getSessionMetadataFieldDefinitions,
+  parseFieldOption,
+  serializeFieldOption
+} from "@/lib/metadata";
+import { TimeLogDatabase, type FieldOptionValueChange, type FieldOptionValueResolution } from "@/lib/time-log-database";
 import { formatDurationWithSeconds, getRunningEntry, netDurationMs } from "@/lib/time";
-import type { FieldDefinition } from "@/lib/types";
+import type { AttributeReferenceGroup, FieldDefinition, SessionMetadata } from "@/lib/types";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
+
+function scopeGroups(groups: AttributeReferenceGroup[], interval: boolean): AttributeReferenceGroup[] {
+  return groups.map((group) => ({
+    ...group,
+    fields: Object.fromEntries(Object.entries(group.fields).filter(([, field]) => Boolean(field.interval) === interval))
+  }));
+}
 
 export function SessionSection() {
   const navigate = useNavigate();
@@ -54,7 +69,6 @@ export function SessionSection() {
   const runningResetKey = runningEntry
     ? JSON.stringify([
         runningEntry.id,
-        runningEntry.intervalMetadata,
         runningEntry.metadata ?? {},
         runningEntry.intervals?.at(-1)?.metadata ?? {}
       ])
@@ -66,7 +80,16 @@ export function SessionSection() {
     name: string;
     field: FieldDefinition;
   } | null>(null);
+  const [pendingOptionResolution, setPendingOptionResolution] = useState<{
+    name: string;
+    nextField: FieldDefinition;
+    changes: FieldOptionValueChange[];
+  } | null>(null);
   const [, setTick] = useState(0);
+  const sessionFields = getSessionMetadataFieldDefinitions(file?.fields ?? {});
+  const intervalFields = getIntervalMetadataFieldDefinitions(file?.fields ?? {});
+  const sessionGroups = scopeGroups(file?.attributeReferenceGroups ?? [], false);
+  const intervalGroups = scopeGroups(file?.attributeReferenceGroups ?? [], true);
 
   useEffect(() => {
     if (!runningEntry) {
@@ -79,15 +102,11 @@ export function SessionSection() {
   useEffect(() => {
     if (runningEntry) {
       setTrackDraftMetadata(
-        runningEntry.intervalMetadata
-          ? {
-              ...(file ? emptyMetadata(file.fields) : {}),
-              ...(runningEntry.intervals?.at(-1)?.metadata ?? {})
-            }
-          : {
-              ...(file ? emptyMetadata(file.fields) : {}),
-              ...(runningEntry.metadata ?? {})
-            }
+        {
+          ...(file ? emptyMetadata(file.fields) : {}),
+          ...(runningEntry.metadata ?? {}),
+          ...(runningEntry.intervals?.at(-1)?.metadata ?? {})
+        }
       );
       return;
     }
@@ -126,6 +145,44 @@ export function SessionSection() {
       return;
     }
     setOptionsEditor({ name, field });
+  }
+
+  async function saveOptions(name: string, nextField: FieldDefinition) {
+    const changes = file ? TimeLogDatabase.getFieldOptionValueChanges(file, name, nextField) : [];
+    if (changes.length > 0) {
+      setPendingOptionResolution({ name, nextField, changes });
+      return false;
+    }
+    const saved = await updateField(name, nextField);
+    if (saved) {
+      setOptionsEditor(null);
+    }
+    return saved;
+  }
+
+  async function resolveOptionValues(resolution: FieldOptionValueResolution) {
+    if (!pendingOptionResolution) {
+      return;
+    }
+    const saved = await updateField(
+      pendingOptionResolution.name,
+      pendingOptionResolution.nextField,
+      {
+        changes: pendingOptionResolution.changes,
+        resolution
+      }
+    );
+    if (saved) {
+      setPendingOptionResolution(null);
+      setOptionsEditor(null);
+    }
+  }
+
+  function updateDraftScope(fields: Record<string, FieldDefinition>, metadata: SessionMetadata) {
+    setTrackDraftMetadata({
+      ...trackDraftMetadata,
+      ...Object.fromEntries(Object.keys(fields).map((key) => [key, metadata[key]]))
+    });
   }
 
   return (
@@ -178,13 +235,27 @@ export function SessionSection() {
             </div>
           </div>
 
-          <MetadataFieldsForm
-            fields={file?.fields ?? {}}
-            attributeReferenceGroups={file?.attributeReferenceGroups ?? []}
-            value={trackDraftMetadata}
-            onChange={setTrackDraftMetadata}
-            onEditOptions={openOptionsEditor}
-          />
+          <section className="grid gap-3">
+            <h3 className="text-sm font-medium text-muted-foreground">Session Fields</h3>
+            <MetadataFieldsForm
+              fields={sessionFields}
+              attributeReferenceGroups={sessionGroups}
+              value={trackDraftMetadata}
+              onChange={(metadata) => updateDraftScope(sessionFields, metadata)}
+              onEditOptions={openOptionsEditor}
+            />
+          </section>
+
+          <section className="grid gap-3">
+            <h3 className="text-sm font-medium text-muted-foreground">Interval Fields</h3>
+            <MetadataFieldsForm
+              fields={intervalFields}
+              attributeReferenceGroups={intervalGroups}
+              value={trackDraftMetadata}
+              onChange={(metadata) => updateDraftScope(intervalFields, metadata)}
+              onEditOptions={openOptionsEditor}
+            />
+          </section>
 
           {!file ? (
             <p className="text-sm text-muted-foreground">
@@ -260,12 +331,18 @@ export function SessionSection() {
           )}
           onOpenChange={(open) => !open && setOptionsEditor(null)}
           onSave={async (options) => {
-            const saved = await updateField(optionsEditor.name, { ...optionsEditor.field, options });
-            if (saved) {
-              setOptionsEditor(null);
-            }
-            return saved;
+            return saveOptions(optionsEditor.name, { ...optionsEditor.field, options });
           }}
+        />
+      ) : null}
+
+      {pendingOptionResolution ? (
+        <FieldOptionValueResolutionDialog
+          open
+          fieldName={pendingOptionResolution.name}
+          changes={pendingOptionResolution.changes}
+          onOpenChange={(open) => !open && setPendingOptionResolution(null)}
+          onResolve={resolveOptionValues}
         />
       ) : null}
     </>

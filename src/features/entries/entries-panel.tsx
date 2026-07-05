@@ -22,7 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EntryForm } from "@/features/timer/entry-form";
-import { formatMetadataFieldValue, getMetadataFields } from "@/lib/metadata";
+import { formatMetadataFieldValue, getSessionMetadataFields } from "@/lib/metadata";
 import { getResolvedMetadataFields, resolveEntryMetadata } from "@/lib/attribute-references";
 import { buildDayDisplayLayout, formatDateTime, formatDuration, getSessionBounds, hourLabel, monthGrid, netDurationMs, weekdayRange } from "@/lib/time";
 import { EntryQueryService } from "@/services/entry-query-service";
@@ -253,6 +253,7 @@ export function EntriesPanel() {
   })));
   const [anchorDate, setAnchorDate] = useState(() => new Date());
   const resolvedFields = useMemo(() => getResolvedMetadataFields(file), [file]);
+  const sessionFields = useMemo(() => getSessionMetadataFields(resolvedFields), [resolvedFields]);
   const displayEntries = useMemo(
     () =>
       file
@@ -286,7 +287,7 @@ export function EntriesPanel() {
     if (!currentEntry) {
       return "Entry";
     }
-    const sourceFields = getMetadataFields(resolvedFields)
+    const sourceFields = sessionFields
       .map(([key, field]) => formatMetadataFieldValue(field, currentEntry.metadata?.[key]))
       .find((value) => value !== "—");
     return sourceFields || "Entry";
@@ -324,7 +325,7 @@ export function EntriesPanel() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">No filter</SelectItem>
-                    {getMetadataFields(resolvedFields).map(([key]) => (
+                    {sessionFields.map(([key]) => (
                       <SelectItem key={key} value={key}>{key}</SelectItem>
                     ))}
                   </SelectContent>
@@ -350,7 +351,8 @@ export function EntriesPanel() {
                   <TableHead><Button variant="ghost" size="sm" onClick={() => setSort("start")}>Start</Button></TableHead>
                   <TableHead><Button variant="ghost" size="sm" onClick={() => setSort("end")}>End</Button></TableHead>
                   <TableHead><Button variant="ghost" size="sm" onClick={() => setSort("duration")}>Duration</Button></TableHead>
-                  {getMetadataFields(resolvedFields).map(([key]) => (
+                  <TableHead>Interval Count</TableHead>
+                  {sessionFields.map(([key]) => (
                     <TableHead key={key}>
                       <Button variant="ghost" size="sm" onClick={() => setSort(key)}>{key}</Button>
                     </TableHead>
@@ -365,7 +367,8 @@ export function EntriesPanel() {
                       <TableCell>{bounds.start ? formatDateTime(bounds.start) : "—"}</TableCell>
                       <TableCell>{entry.type === "running" ? <Badge>Running</Badge> : bounds.end ? formatDateTime(bounds.end) : "—"}</TableCell>
                       <TableCell>{formatDuration(netDurationMs(entry))}</TableCell>
-                      {getMetadataFields(resolvedFields).map(([key, field]) => (
+                      <TableCell>{entry.intervals?.length ?? 0}</TableCell>
+                      {sessionFields.map(([key, field]) => (
                         <TableCell key={key}>{formatMetadataFieldValue(field, entry.metadata?.[key])}</TableCell>
                       ))}
                     </TableRow>

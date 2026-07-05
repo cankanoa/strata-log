@@ -26,6 +26,7 @@ export type FieldDefinition = {
   type: FieldType;
   selection?: FieldSelection;
   options?: string[];
+  interval?: boolean;
   required?: boolean;
   visibility: FieldVisibility;
   default?: MetadataValue | null;
@@ -46,7 +47,6 @@ export type TimeInterval = {
 export type EntryInterval = {
   id: string;
   type?: string;
-  intervalMetadata?: boolean;
   intervals?: TimeInterval[];
   metadata?: SessionMetadata;
 };

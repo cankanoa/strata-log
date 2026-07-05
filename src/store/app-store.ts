@@ -1,10 +1,19 @@
 import { create } from "zustand";
-import { applyResolvedMetadataDefaults, getResolvedMetadataFields } from "@/lib/attribute-references";
+import {
+  applyResolvedMetadataDefaults,
+  getIntervalFields,
+  getResolvedMetadataFields,
+  getSessionFields
+} from "@/lib/attribute-references";
 import { ConflictService } from "@/services/conflict-service";
 import type { DatabaseLocation } from "@/lib/database-registry";
 import { getPlatformApi, loadRawIntoFile } from "@/lib/platform";
 import { normalizeMetadata } from "@/lib/metadata";
-import { TimeLogDatabase } from "@/lib/time-log-database";
+import {
+  TimeLogDatabase,
+  type FieldOptionValueChange,
+  type FieldOptionValueResolution
+} from "@/lib/time-log-database";
 import { toIsoWithOffset } from "@/lib/time";
 import type {
   AppSnapshot,
@@ -74,7 +83,14 @@ type StoreState = AppSnapshot & {
   stopLiveEntry: () => Promise<void>;
   addField: (name: string, field: FieldDefinition) => Promise<boolean>;
   renameField: (previousName: string, nextName: string) => Promise<boolean>;
-  updateField: (name: string, nextField: FieldDefinition) => Promise<boolean>;
+  updateField: (
+    name: string,
+    nextField: FieldDefinition,
+    optionResolution?: {
+      changes: FieldOptionValueChange[];
+      resolution: FieldOptionValueResolution;
+    }
+  ) => Promise<boolean>;
   updateFieldAttributeReferences: (name: string, labels: string[]) => Promise<boolean>;
   deleteField: (name: string) => Promise<boolean>;
   fillMissingFieldValues: (name: string, value: SessionMetadata[string]) => Promise<boolean>;
@@ -124,30 +140,24 @@ async function watchHandle(handle: FileHandleInfo, set: (partial: Partial<StoreS
 }
 
 function normalizeEntry(file: TimeLogFile, entry: Omit<EntryInterval, "id"> | EntryInterval) {
-  const resolvedFields = getResolvedMetadataFields(file);
-  const intervalMetadata = Boolean(entry.intervalMetadata);
+  const sessionFields = getSessionFields(file);
+  const intervalFields = getIntervalFields(file);
 
   return {
     ...entry,
-    intervalMetadata,
-    metadata: intervalMetadata
-      ? {}
-      : applyResolvedMetadataDefaults(file, normalizeMetadata(resolvedFields, entry.metadata ?? {})),
+    metadata: normalizeMetadata(sessionFields, entry.metadata ?? {}),
     intervals: (entry.intervals ?? []).map((interval) => ({
       ...interval,
-      metadata: intervalMetadata
-        ? applyResolvedMetadataDefaults(file, normalizeMetadata(resolvedFields, interval.metadata))
-        : {}
+      metadata: normalizeMetadata(intervalFields, interval.metadata)
     }))
   };
 }
 
 function validateEntry(file: TimeLogFile, entry: Omit<EntryInterval, "id"> | EntryInterval): string[] {
-  if (entry.intervalMetadata) {
-    return (entry.intervals ?? []).flatMap((interval) => validateMetadataPayload(file.fields, interval.metadata, file));
-  }
-
-  return validateMetadataPayload(file.fields, entry.metadata, file);
+  return [
+    ...validateMetadataPayload(getSessionFields(file), entry.metadata, file),
+    ...(entry.intervals ?? []).flatMap((interval) => validateMetadataPayload(getIntervalFields(file), interval.metadata, file))
+  ];
 }
 
 export const useAppStore = create<StoreState>((set, get) => ({
@@ -503,12 +513,15 @@ export const useAppStore = create<StoreState>((set, get) => ({
     }
     const resolvedFields = getResolvedMetadataFields(current);
     const normalizedMetadata = applyResolvedMetadataDefaults(current, normalizeMetadata(resolvedFields, metadata));
-    const validationErrors = validateMetadataPayload(current.fields, normalizedMetadata, current);
+    const validationErrors = [
+      ...validateMetadataPayload(getSessionFields(current), normalizedMetadata, current),
+      ...validateMetadataPayload(getIntervalFields(current), normalizedMetadata, current)
+    ];
     if (validationErrors.length > 0) {
       set({ errors: validationErrors });
       return false;
     }
-    const next = TimerService.startLiveEntry(current, normalizedMetadata, toIsoWithOffset(new Date()), false);
+    const next = TimerService.startLiveEntry(current, normalizedMetadata, toIsoWithOffset(new Date()));
     set({ file: next, hasUnsavedChanges: true, errors: [] });
     await get().saveCurrentFile();
     return true;
@@ -522,12 +535,15 @@ export const useAppStore = create<StoreState>((set, get) => ({
     }
     const resolvedFields = getResolvedMetadataFields(current);
     const normalizedMetadata = applyResolvedMetadataDefaults(current, normalizeMetadata(resolvedFields, metadata));
-    const validationErrors = validateMetadataPayload(current.fields, normalizedMetadata, current);
+    const validationErrors = [
+      ...validateMetadataPayload(getSessionFields(current), normalizedMetadata, current),
+      ...validateMetadataPayload(getIntervalFields(current), normalizedMetadata, current)
+    ];
     if (validationErrors.length > 0) {
       set({ errors: validationErrors });
       return false;
     }
-    const next = TimerService.startLiveEntry(current, normalizedMetadata, start, false);
+    const next = TimerService.startLiveEntry(current, normalizedMetadata, start);
     set({ file: next, hasUnsavedChanges: true, errors: [] });
     await get().saveCurrentFile();
     return true;
@@ -579,7 +595,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
     return true;
   },
 
-  async updateField(name, nextField) {
+  async updateField(name, nextField, optionResolution) {
     const current = get().file;
     if (!current) {
       set({ errors: ["Open a file before editing fields."] });
@@ -589,7 +605,16 @@ export const useAppStore = create<StoreState>((set, get) => ({
       set({ errors: [`Field "${name}" was not found.`] });
       return false;
     }
-    const next = TimeLogDatabase.updateField(current, name, nextField);
+    const prepared = optionResolution
+      ? TimeLogDatabase.resolveFieldOptionValues(
+          current,
+          name,
+          nextField,
+          optionResolution.changes,
+          optionResolution.resolution
+        )
+      : current;
+    const next = TimeLogDatabase.updateField(prepared, name, nextField);
     const validation = validateFile(next);
     if (!validation.file) {
       set({ errors: validation.errors });

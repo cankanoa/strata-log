@@ -7,6 +7,7 @@ export type DatabaseRegistryEntry = {
   id: string;
   location: DatabaseLocation;
   url: string;
+  activeDatabase?: boolean;
 };
 
 const EMPTY_REGISTRY = `--- csdb
@@ -21,9 +22,10 @@ const DATABASES_TABLE: TableSchema = {
   columns: {
     id: "text",
     location: "text",
-    url: "text"
+    url: "text",
+    active_database: "boolean"
   },
-  required: ["id", "location", "url"],
+  required: ["id", "location", "url", "active_database"],
   primary_key: { columns: ["id"] }
 };
 
@@ -37,31 +39,66 @@ function normalizeLocation(value: unknown): DatabaseLocation {
   return value === "Internal" ? "Internal" : "Path";
 }
 
+function normalizeBoolean(value: unknown): boolean {
+  return value === true || value === "true";
+}
+
+function normalizeActiveDatabase(entries: DatabaseRegistryEntry[]): DatabaseRegistryEntry[] {
+  let foundActive = false;
+  return entries.map((entry) => {
+    const activeDatabase = Boolean(entry.activeDatabase) && !foundActive;
+    foundActive = foundActive || activeDatabase;
+    return {
+      ...entry,
+      activeDatabase
+    };
+  });
+}
+
 export function createDatabaseRegistryEntry(location: DatabaseLocation, url: string): DatabaseRegistryEntry {
   return {
     id: uuidv4(),
     location,
-    url
+    url,
+    activeDatabase: false
   };
+}
+
+export function setActiveDatabaseEntry(entries: DatabaseRegistryEntry[], activeId: string | null): DatabaseRegistryEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    activeDatabase: activeId !== null && entry.id === activeId
+  }));
+}
+
+export function getActiveDatabaseEntry(entries: DatabaseRegistryEntry[]): DatabaseRegistryEntry | undefined {
+  return entries.find((entry) => entry.activeDatabase);
 }
 
 export function parseDatabaseRegistry(raw: string): DatabaseRegistryEntry[] {
   const db = CSDBDatabase.parse(raw);
-  const rows = db.document.tables.get("databases")?.rows ?? [];
-  return rows.map((row: Row) => ({
-    id: String(row.id),
-    location: normalizeLocation(row.location),
-    url: String(row.url ?? "")
-  })).filter((entry) => entry.id.length > 0 && entry.url.length > 0);
+  if (!db.document.tables.has("databases")) {
+    return [];
+  }
+  return normalizeActiveDatabase(
+    db.table("databases").all().map((row: Row) => ({
+      id: String(row.id),
+      location: normalizeLocation(row.location),
+      url: String(row.url ?? ""),
+      activeDatabase: normalizeBoolean(row.active_database)
+    })).filter((entry) => entry.id.length > 0 && entry.url.length > 0)
+  );
 }
 
 export function serializeDatabaseRegistry(entries: DatabaseRegistryEntry[]): string {
   const db = createRegistryDatabase();
-  if (entries.length > 0) {
-    db.table("databases").insert(entries.map((entry) => ({
+  const normalizedEntries = normalizeActiveDatabase(entries);
+  if (normalizedEntries.length > 0) {
+    db.table("databases").insert(normalizedEntries.map((entry) => ({
       id: entry.id,
       location: entry.location,
-      url: entry.url
+      url: entry.url,
+      active_database: Boolean(entry.activeDatabase)
     })));
   }
   return serializeCSDB(db);

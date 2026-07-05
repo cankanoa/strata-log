@@ -3,12 +3,14 @@ import type { CSDBDatabase, Row } from "@/lib/csdb";
 import {
   getFieldSelection,
   getFieldOptions,
-  getMetadataFields,
+  getIntervalMetadataFields,
+  getSessionMetadataFields,
   hasMetadataValue,
   normalizeFieldVisibility,
   normalizeFieldDefinition,
   normalizeMetadata,
   parseFieldOption,
+  parseMetadataValueForField,
   serializeCellValue,
   serializeFieldOption
 } from "@/lib/metadata";
@@ -17,9 +19,15 @@ import { normalizeSessionPresets } from "@/lib/session-presets";
 import type { EntryInterval, FieldDefinition, MetadataValue, SessionMetadata, SessionPreset, TimeLogFile } from "@/lib/types";
 import { buildDatabaseFromFile, fileFromDatabase } from "@/lib/yaml";
 
-function rows(db: CSDBDatabase, tableName: string): Row[] {
-  return db.document.tables.get(tableName)?.rows ?? [];
-}
+export type FieldOptionValueResolution = "remove" | "update";
+
+export type FieldOptionValueChange = {
+  previousValue: string;
+  previousDisplay: string;
+  nextValue?: string;
+  nextDisplay?: string;
+  count: number;
+};
 
 function singleValueField(field: FieldDefinition): FieldDefinition {
   return {
@@ -31,6 +39,18 @@ function singleValueField(field: FieldDefinition): FieldDefinition {
 
 function serializeJsonValue(value: MetadataValue | null | undefined): string {
   return JSON.stringify(value ?? null);
+}
+
+function serializeFieldOptionsJson(field: FieldDefinition): string {
+  return serializeJsonValue(
+    getFieldOptions(field).map((option) =>
+      serializeFieldOption({
+        display: option.display,
+        value: option.value,
+        raw: option.raw
+      })
+    )
+  );
 }
 
 function toStoredValues(field: FieldDefinition, value: MetadataValue): string[] {
@@ -70,16 +90,18 @@ function fieldScope(groupLabel?: string): "regular" | "attribute_reference_group
 }
 
 function findFieldRow(db: CSDBDatabase, name: string, groupLabel?: string): Row | undefined {
-  return rows(db, "fields").find((row) =>
-    String(row.name) === name &&
-    String(row.scope) === fieldScope(groupLabel) &&
-    (groupLabel ? String(row.attribute_reference_group_label ?? "") === groupLabel : row.attribute_reference_group_label == null)
-  );
+  return db.table("fields").where({
+    name,
+    scope: fieldScope(groupLabel),
+    attribute_reference_group_label: groupLabel ?? null
+  }).first();
 }
 
 function deleteEntryRows(db: CSDBDatabase, entryId: string) {
-  const intervalIds = rows(db, "intervals")
-    .filter((row) => row.session_id === entryId)
+  const intervalIds = db.table("intervals")
+    .where({ session_id: entryId })
+    .select(["id"])
+    .all()
     .map((row) => String(row.id));
 
   intervalIds.forEach((intervalId) => {
@@ -104,17 +126,10 @@ function insertFieldDefinitionRows(db: CSDBDatabase, name: string, rawField: Fie
       name,
       type: field.type,
       selection: getFieldSelection(field),
+      interval: Boolean(field.interval),
       required: Boolean(field.required),
       visibility: normalizeFieldVisibility(field),
-      options_json: serializeJsonValue(
-        getFieldOptions(field).map((option) =>
-          serializeFieldOption({
-            display: option.display,
-            value: option.value,
-            raw: option.raw
-          })
-        )
-      ),
+      options_json: serializeFieldOptionsJson(field),
       default_json: serializeJsonValue(field.default),
       scope: fieldScope(groupLabel),
       attribute_reference_group_label: groupLabel ?? null
@@ -125,17 +140,10 @@ function insertFieldDefinitionRows(db: CSDBDatabase, name: string, rawField: Fie
       name,
       type: field.type,
       selection: getFieldSelection(field),
+      interval: Boolean(field.interval),
       required: Boolean(field.required),
       visibility: normalizeFieldVisibility(field),
-      options_json: serializeJsonValue(
-        getFieldOptions(field).map((option) =>
-          serializeFieldOption({
-            display: option.display,
-            value: option.value,
-            raw: option.raw
-          })
-        )
-      ),
+      options_json: serializeFieldOptionsJson(field),
       default_json: serializeJsonValue(field.default),
       scope: fieldScope(groupLabel),
       attribute_reference_group_label: groupLabel ?? null
@@ -168,16 +176,17 @@ function insertMetadataRows(
 
 function normalizeEntryForStorage(file: TimeLogFile, entry: EntryInterval): EntryInterval {
   const resolvedFields = getResolvedMetadataFields(file);
+  const sessionFields = Object.fromEntries(getSessionMetadataFields(resolvedFields));
+  const intervalFields = Object.fromEntries(getIntervalMetadataFields(resolvedFields));
   return {
     ...entry,
     id: entry.id,
     type: entry.type ?? "interval",
-    intervalMetadata: Boolean(entry.intervalMetadata),
-    metadata: normalizeMetadata(resolvedFields, entry.metadata ?? {}),
+    metadata: normalizeMetadata(sessionFields, entry.metadata ?? {}),
     intervals: (entry.intervals ?? []).map((interval) => ({
       ...interval,
       id: interval.id ?? uuidv4(),
-      metadata: normalizeMetadata(resolvedFields, interval.metadata ?? {})
+      metadata: normalizeMetadata(intervalFields, interval.metadata ?? {})
     }))
   };
 }
@@ -188,15 +197,12 @@ function insertEntryRows(db: CSDBDatabase, file: TimeLogFile, rawEntry: EntryInt
 
   db.table("sessions").insert({
     id: entry.id,
-    type: entry.type ?? "interval",
-    interval_metadata: Boolean(entry.intervalMetadata)
+    type: entry.type ?? "interval"
   });
 
-  if (!entry.intervalMetadata) {
-    getMetadataFields(resolvedFields).forEach(([fieldName, field]) => {
-      insertMetadataRows(db, { sessionId: entry.id }, fieldName, field, entry.metadata?.[fieldName]);
-    });
-  }
+  getSessionMetadataFields(resolvedFields).forEach(([fieldName, field]) => {
+    insertMetadataRows(db, { sessionId: entry.id }, fieldName, field, entry.metadata?.[fieldName]);
+  });
 
   (entry.intervals ?? []).forEach((interval) => {
     const intervalId = interval.id ?? uuidv4();
@@ -207,18 +213,14 @@ function insertEntryRows(db: CSDBDatabase, file: TimeLogFile, rawEntry: EntryInt
       end_time: interval.end ?? null
     });
 
-    if (!entry.intervalMetadata) {
-      return;
-    }
-
-    getMetadataFields(resolvedFields).forEach(([fieldName, field]) => {
+    getIntervalMetadataFields(resolvedFields).forEach(([fieldName, field]) => {
       insertMetadataRows(db, { intervalId }, fieldName, field, interval.metadata?.[fieldName]);
     });
   });
 }
 
 function latestIntervalRow(db: CSDBDatabase, sessionId: string): Row | undefined {
-  return rows(db, "intervals").filter((row) => row.session_id === sessionId).at(-1);
+  return db.table("intervals").where({ session_id: sessionId }).all().at(-1);
 }
 
 function selectorFieldNames(file: TimeLogFile): string[] {
@@ -242,7 +244,7 @@ function uniqueLabels(labels: string[]): string[] {
 }
 
 function ensureAttributeReferenceGroupRow(db: CSDBDatabase, label: string) {
-  if (rows(db, "attribute_reference_groups").some((row) => String(row.label) === label)) {
+  if (db.table("attribute_reference_groups").byPrimaryKey(label)) {
     return;
   }
 
@@ -370,15 +372,111 @@ function collectObservedFieldOptionValues(file: TimeLogFile, name: string, field
   addValue(field.default ?? undefined);
 
   file.entries.forEach((entry) => {
-    if (entry.intervalMetadata) {
+    if (field.interval) {
       (entry.intervals ?? []).forEach((interval) => addValue(interval.metadata?.[name]));
       return;
     }
-
     addValue(entry.metadata?.[name]);
   });
 
   return [...serialized];
+}
+
+function optionStoredValue(field: FieldDefinition, option: { value: string }): string {
+  return serializeCellValue(singleValueField(field), parseMetadataValueForField(singleValueField(field), option.value));
+}
+
+function countFieldOptionValueUsage(
+  db: CSDBDatabase,
+  file: TimeLogFile,
+  name: string,
+  field: FieldDefinition,
+  storedValue: string
+): number {
+  let count = db.table("metadata").where({ field_name: name, value_text: storedValue }).all().length;
+  function countValue(value: MetadataValue) {
+    count += toStoredValues(field, value).filter((item) => item === storedValue).length;
+  }
+  if (field.default !== undefined && field.default !== null) {
+    countValue(field.default);
+  }
+  file.sessionPresets.forEach((preset) => countValue(preset.metadata[name]));
+  return count;
+}
+
+function resolveOptionValue(
+  field: FieldDefinition,
+  value: MetadataValue,
+  replacements: Map<string, MetadataValue | undefined>,
+  resolution: FieldOptionValueResolution
+): MetadataValue {
+  if (!hasMetadataValue(value)) {
+    return undefined;
+  }
+
+  if (getFieldSelection(field) === "multiselect") {
+    const nextValues: Array<boolean | number | string> = [];
+    const seen = new Set<string>();
+    (Array.isArray(value) ? value : []).forEach((item) => {
+      if (item === undefined || item === null) {
+        return;
+      }
+      const stored = serializeCellValue(singleValueField(field), item);
+      const replacement = replacements.get(stored);
+      const nextValue = replacements.has(stored)
+        ? resolution === "update"
+          ? replacement
+          : undefined
+        : item;
+      if (nextValue === undefined || Array.isArray(nextValue)) {
+        return;
+      }
+      const nextStored = serializeCellValue(singleValueField(field), nextValue);
+      if (seen.has(nextStored)) {
+        return;
+      }
+      seen.add(nextStored);
+      nextValues.push(nextValue);
+    });
+    return nextValues.length > 0 ? nextValues : undefined;
+  }
+
+  if (Array.isArray(value)) {
+    return undefined;
+  }
+  const stored = serializeCellValue(singleValueField(field), value);
+  if (!replacements.has(stored)) {
+    return value;
+  }
+  return resolution === "update" ? replacements.get(stored) : undefined;
+}
+
+function resolveMetadataOptionValues(
+  metadata: SessionMetadata | undefined,
+  name: string,
+  field: FieldDefinition,
+  replacements: Map<string, MetadataValue | undefined>,
+  resolution: FieldOptionValueResolution
+): SessionMetadata {
+  const nextValue = resolveOptionValue(field, metadata?.[name], replacements, resolution);
+  return {
+    ...(metadata ?? {}),
+    [name]: nextValue
+  };
+}
+
+function optionValueReplacements(
+  field: FieldDefinition,
+  changes: FieldOptionValueChange[]
+): Map<string, MetadataValue | undefined> {
+  return new Map(
+    changes.map((change) => [
+      change.previousValue,
+      change.nextValue === undefined
+        ? undefined
+        : parseMetadataValueForField(singleValueField(field), change.nextValue)
+    ])
+  );
 }
 
 function convertFieldSelectionInFile(
@@ -391,7 +489,7 @@ function convertFieldSelectionInFile(
   const currentSelection = getFieldSelection(currentField);
   const nextSelection = getFieldSelection(nextField);
 
-  if (currentSelection === nextSelection) {
+  if (currentSelection === nextSelection && Boolean(currentField.interval) === Boolean(nextField.interval)) {
     return file;
   }
 
@@ -399,14 +497,18 @@ function convertFieldSelectionInFile(
 
   return {
     ...updateEntries(file, (entry) => {
-      if (entry.intervalMetadata) {
+      if (nextField.interval) {
         return {
           ...entry,
+          metadata: {
+            ...(entry.metadata ?? {}),
+            [name]: undefined
+          },
           intervals: (entry.intervals ?? []).map((interval) => ({
             ...interval,
             metadata: {
               ...(interval.metadata ?? {}),
-              [name]: convertSelectionValue(interval.metadata?.[name], nextSelection)
+              [name]: convertSelectionValue(interval.metadata?.[name] ?? entry.metadata?.[name], nextSelection)
             }
           }))
         };
@@ -416,8 +518,15 @@ function convertFieldSelectionInFile(
         ...entry,
         metadata: {
           ...(entry.metadata ?? {}),
-          [name]: convertSelectionValue(entry.metadata?.[name], nextSelection)
-        }
+          [name]: convertSelectionValue(entry.metadata?.[name] ?? entry.intervals?.find((interval) => hasMetadataValue(interval.metadata?.[name]))?.metadata?.[name], nextSelection)
+        },
+        intervals: (entry.intervals ?? []).map((interval) => ({
+          ...interval,
+          metadata: {
+            ...(interval.metadata ?? {}),
+            [name]: undefined
+          }
+        }))
       };
     }),
     fields: !groupLabel
@@ -454,7 +563,6 @@ export const TimeLogDatabase = {
       ...input,
       id: uuidv4(),
       type: input.type ?? "interval",
-      intervalMetadata: Boolean(input.intervalMetadata),
       intervals: (input.intervals ?? []).map((interval) => ({
         ...interval,
         id: interval.id ?? uuidv4(),
@@ -490,18 +598,20 @@ export const TimeLogDatabase = {
     };
   },
 
-  startLiveEntry(file: TimeLogFile, metadata: SessionMetadata, now: string, intervalMetadata = false): TimeLogFile {
+  startLiveEntry(file: TimeLogFile, metadata: SessionMetadata, now: string): TimeLogFile {
+    const resolvedFields = getResolvedMetadataFields(file);
+    const sessionFields = Object.fromEntries(getSessionMetadataFields(resolvedFields));
+    const intervalFields = Object.fromEntries(getIntervalMetadataFields(resolvedFields));
     return this.addEntry(file, {
       id: uuidv4(),
       type: "running",
-      intervalMetadata,
-      metadata: intervalMetadata ? {} : metadata,
+      metadata: normalizeMetadata(sessionFields, metadata),
       intervals: [
         {
           id: uuidv4(),
           start: now,
           end: now,
-          metadata: intervalMetadata ? metadata : {}
+          metadata: normalizeMetadata(intervalFields, metadata)
         }
       ]
     });
@@ -566,6 +676,85 @@ export const TimeLogDatabase = {
     });
   },
 
+  getFieldOptionValueChanges(file: TimeLogFile, name: string, nextField: FieldDefinition): FieldOptionValueChange[] {
+    const currentField = file.fields[name];
+    if (!currentField || getFieldSelection(currentField) === "single" || getFieldSelection(nextField) === "single") {
+      return [];
+    }
+    const db = buildDatabaseFromFile(file);
+    const currentOptions = getFieldOptions(currentField);
+    const nextOptions = getFieldOptions(nextField);
+    const nextValues = new Set(nextOptions.map((option) => optionStoredValue(nextField, option)));
+
+    return currentOptions.flatMap((option, index) => {
+      const previousValue = optionStoredValue(currentField, option);
+      if (nextValues.has(previousValue)) {
+        return [];
+      }
+      const count = countFieldOptionValueUsage(db, file, name, currentField, previousValue);
+      if (count === 0) {
+        return [];
+      }
+      const nextOption = currentOptions.length === nextOptions.length || nextOptions.length > currentOptions.length
+        ? nextOptions[index]
+        : undefined;
+      const nextValue = nextOption ? optionStoredValue(nextField, nextOption) : undefined;
+      return [{
+        previousValue,
+        previousDisplay: option.display ?? option.value,
+        nextValue,
+        nextDisplay: nextOption ? nextOption.display ?? nextOption.value : undefined,
+        count
+      }];
+    });
+  },
+
+  resolveFieldOptionValues(
+    file: TimeLogFile,
+    name: string,
+    nextField: FieldDefinition,
+    changes: FieldOptionValueChange[],
+    resolution: FieldOptionValueResolution
+  ): TimeLogFile {
+    const currentField = file.fields[name];
+    if (!currentField || changes.length === 0) {
+      return file;
+    }
+    const db = buildDatabaseFromFile(file);
+    const replacements = optionValueReplacements(nextField, changes);
+    const fieldRow = findFieldRow(db, name);
+    if (fieldRow) {
+      db.table("fields").where({ id: String(fieldRow.id) }).update({
+        options_json: serializeFieldOptionsJson(nextField),
+        default_json: serializeJsonValue(resolveOptionValue(currentField, currentField.default ?? undefined, replacements, resolution))
+      });
+    }
+
+    changes.forEach((change) => {
+      const query = db.table("metadata").where({ field_name: name, value_text: change.previousValue });
+      if (resolution === "update" && change.nextValue !== undefined) {
+        query.update({ value_text: change.nextValue });
+        return;
+      }
+      query.delete();
+    });
+
+    db.table("session_presets").all().forEach((presetRow) => {
+      const metadata = resolveMetadataOptionValues(
+        JSON.parse(String(presetRow.metadata_json ?? "{}")) as SessionMetadata,
+        name,
+        currentField,
+        replacements,
+        resolution
+      );
+      db.table("session_presets").where({ id: String(presetRow.id) }).update({
+        metadata_json: JSON.stringify(metadata)
+      });
+    });
+
+    return readFile(db);
+  },
+
   addAttributeReferenceToField(file: TimeLogFile, name: string, label: string): TimeLogFile {
     return mutateFile(file, (db) => {
       addAttributeReferenceToFieldRows(db, name, label);
@@ -627,8 +816,9 @@ export const TimeLogDatabase = {
   deleteAttributeReferenceGroup(file: TimeLogFile, groupLabel: string): TimeLogFile {
     return mutateFile(file, (db) => {
       db.table("fields").where({ attribute_reference_group_label: groupLabel }).delete();
-      rows(db, "fields")
-        .filter((row) => String(row.type) === "attribute_reference")
+      db.table("fields")
+        .where({ type: "attribute_reference" })
+        .all()
         .forEach((row) => {
           const options = (() => {
             try {
@@ -650,7 +840,7 @@ export const TimeLogDatabase = {
 
   countMissingFieldValues(file: TimeLogFile, name: string): number {
     return file.entries.reduce((count, entry) => {
-      if (entry.intervalMetadata) {
+      if (file.fields[name]?.interval) {
         return count + (entry.intervals ?? []).filter((interval) => !hasMetadataValue(interval.metadata?.[name])).length;
       }
       return count + (hasMetadataValue(entry.metadata?.[name]) ? 0 : 1);
@@ -665,7 +855,7 @@ export const TimeLogDatabase = {
 
     const normalizedValue = normalizeMetadata({ [name]: field }, { [name]: value })[name];
     return updateEntries(file, (entry) => {
-      if (entry.intervalMetadata) {
+      if (field.interval) {
         return {
           ...entry,
           intervals: (entry.intervals ?? []).map((interval) =>

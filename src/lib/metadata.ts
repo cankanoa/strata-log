@@ -6,8 +6,7 @@ export const BUILTIN_FIELD_DEFINITIONS = {
   type: { type: "string", selection: "single", required: false, visibility: "viewable", default: null },
   start_time: { type: "datetime", selection: "single", required: false, visibility: "viewable", default: null },
   end_time: { type: "datetime", selection: "single", required: false, visibility: "viewable", default: null },
-  session_id: { type: "uuid", selection: "single", required: false, visibility: "viewable", default: null },
-  interval_metadata: { type: "bool", selection: "single", required: false, visibility: "viewable", default: false }
+  session_id: { type: "uuid", selection: "single", required: false, visibility: "viewable", default: null }
 } as const satisfies Record<string, FieldDefinition>;
 
 export const fieldTypeOptions: FieldType[] = [
@@ -47,6 +46,7 @@ export function normalizeFieldDefinition(field: FieldDefinition): FieldDefinitio
   return {
     ...field,
     selection,
+    interval: Boolean(field.interval),
     visibility,
     options
   };
@@ -74,7 +74,19 @@ export function getMetadataFields(fields: Record<string, FieldDefinition>): Arra
 }
 
 export function getSessionMetadataFields(fields: Record<string, FieldDefinition>): Array<[string, FieldDefinition]> {
-  return getMetadataFields(fields).filter(([, field]) => field.type !== "attribute_reference");
+  return getMetadataFields(fields).filter(([, field]) => !field.interval && field.type !== "attribute_reference");
+}
+
+export function getIntervalMetadataFields(fields: Record<string, FieldDefinition>): Array<[string, FieldDefinition]> {
+  return getMetadataFields(fields).filter(([, field]) => Boolean(field.interval));
+}
+
+export function getSessionMetadataFieldDefinitions(fields: Record<string, FieldDefinition>): Record<string, FieldDefinition> {
+  return Object.fromEntries(getMetadataFields(fields).filter(([, field]) => !field.interval));
+}
+
+export function getIntervalMetadataFieldDefinitions(fields: Record<string, FieldDefinition>): Record<string, FieldDefinition> {
+  return Object.fromEntries(getIntervalMetadataFields(fields));
 }
 
 export function getFieldSelection(field: FieldDefinition | undefined): FieldSelection {

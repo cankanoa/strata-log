@@ -112,7 +112,7 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
                     <SelectSeparator />
                     <SelectItem value={EDIT_OPTIONS_VALUE}>
                       <Pencil className="size-4" />
-                      Edit options
+                      Options
                     </SelectItem>
                   </>
                 ) : null}
@@ -156,7 +156,7 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], valu
               {addable ? (
                 <Button type="button" variant="ghost" size="sm" onClick={() => onEditOptions?.(key)}>
                   <Pencil className="size-4" />
-                  Edit options
+                  Options
                 </Button>
               ) : null}
             </div>

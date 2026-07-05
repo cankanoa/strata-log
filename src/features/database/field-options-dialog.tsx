@@ -219,6 +219,7 @@ function OptionRow({
       </TableCell>
       <TableCell className="w-14 align-top">
         <Button
+          type="button"
           variant="ghost"
           size="icon"
           onClick={onRemove}
@@ -245,6 +246,7 @@ export function FieldOptionsDialog({
     ...field,
     selection: "single"
   };
+  const initialOptionsKey = initialOptions.join("\u001f");
 
   useEffect(() => {
     if (!open) {
@@ -256,7 +258,7 @@ export function FieldOptionsDialog({
         : []
     );
     setNewOption(createOptionDraft(singleValueField));
-  }, [field.type, initialOptions, open]);
+  }, [field.type, initialOptionsKey, open]);
 
   function updateOption(index: number, patch: Partial<OptionDraft>) {
     setOptions((current) =>
@@ -355,6 +357,7 @@ export function FieldOptionsDialog({
                 </TableCell>
                 <TableCell className="w-14 align-top">
                   <Button
+                    type="button"
                     variant="ghost"
                     size="icon"
                     onClick={appendNewOption}
@@ -368,10 +371,10 @@ export function FieldOptionsDialog({
 
           <div className="flex justify-end gap-2">
             <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => onOpenChange(false)}>
+              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              <Button onClick={() => void handleSave()}>
+              <Button type="button" onClick={() => void handleSave()}>
                 Save
               </Button>
             </div>

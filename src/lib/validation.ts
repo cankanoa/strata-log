@@ -3,10 +3,12 @@ import { validate as isUuid } from "uuid";
 import {
   ensureBuiltinFields,
   getFieldDefaultValue,
+  getIntervalMetadataFieldDefinitions,
   getFieldSelection,
   normalizeFieldVisibility,
   getFieldOptions,
   getSessionMetadataFields,
+  getSessionMetadataFieldDefinitions,
   getMetadataFields,
   hasMetadataValue,
   isBuiltinField,
@@ -51,6 +53,7 @@ const fieldDefinitionSchema: z.ZodType<FieldDefinition> = z.object({
   options: z.array(z.string().min(1)).optional(),
   required: z.boolean().optional(),
   visibility: fieldVisibilitySchema,
+  interval: z.boolean().optional(),
   default: metadataValueSchema.nullable().optional()
 });
 
@@ -64,7 +67,6 @@ const intervalSchema: z.ZodType<TimeInterval> = z.object({
 const entrySchema: z.ZodType<EntryInterval> = z.object({
   id: z.string().uuid(),
   type: z.string().optional(),
-  intervalMetadata: z.boolean().optional(),
   intervals: z.array(intervalSchema).optional(),
   metadata: z.record(metadataValueSchema).optional()
 });
@@ -184,8 +186,7 @@ export function validateFieldDefinitions(fields: Record<string, FieldDefinition>
     ["type", "string"],
     ["start_time", "datetime"],
     ["end_time", "datetime"],
-    ["session_id", "uuid"],
-    ["interval_metadata", "bool"]
+    ["session_id", "uuid"]
   ];
 
   requiredBuiltins.forEach(([key, type]) => {
@@ -278,8 +279,15 @@ export function validateMetadataPayload(
   file?: TimeLogFile
 ): string[] {
   const source = metadata ?? {};
-  const availableFields = file ? getResolvedMetadataFields(file) : fields;
-  const activeFields = file ? getActiveMetadataFields(file, source) : availableFields;
+  const availableFieldSource = file ? getResolvedMetadataFields(file) : fields;
+  const requestedFieldNames = new Set(Object.keys(fields));
+  const availableFields = Object.fromEntries(
+    Object.entries(availableFieldSource).filter(([key]) => requestedFieldNames.has(key))
+  );
+  const activeFieldSource = file ? getActiveMetadataFields(file, source) : availableFields;
+  const activeFields = Object.fromEntries(
+    Object.entries(activeFieldSource).filter(([key]) => requestedFieldNames.has(key))
+  );
   const errors = Object.entries(source).flatMap(([key, value]) => {
     const field = availableFields[key];
     if (!field || isBuiltinField(key)) {
@@ -338,11 +346,12 @@ function validateIntervals(entry: EntryInterval): string[] {
 }
 
 function validateEntryMetadata(file: TimeLogFile, entry: EntryInterval): string[] {
-  if (entry.intervalMetadata) {
-    return (entry.intervals ?? []).flatMap((interval) => validateMetadataPayload(file.fields, interval.metadata, file));
-  }
-
-  return validateMetadataPayload(file.fields, entry.metadata, file);
+  return [
+    ...validateMetadataPayload(getSessionMetadataFieldDefinitions(getResolvedMetadataFields(file)), entry.metadata, file),
+    ...(entry.intervals ?? []).flatMap((interval) =>
+      validateMetadataPayload(getIntervalMetadataFieldDefinitions(getResolvedMetadataFields(file)), interval.metadata, file)
+    )
+  ];
 }
 
 export function validateFile(input: unknown): { file: TimeLogFile | null; errors: string[] } {

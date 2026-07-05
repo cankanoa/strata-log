@@ -7,6 +7,7 @@ import { formatDuration, formatDurationWithSeconds, getRunningEntry, netDuration
 import { TaskSidebarBrowser } from "@/components/task/task-sidebar-browser";
 import { DatabaseReferenceSyncDialog } from "@/features/database/database-reference-sync-dialog";
 import { getMissingDatabaseReferences, removeDatabaseReferences, type DatabaseReferenceStatus } from "@/lib/database-registry-sync";
+import { getActiveDatabaseEntry, parseDatabaseRegistry } from "@/lib/database-registry";
 import { getPlatformApi } from "@/lib/platform";
 import { Toaster } from "@/components/ui/sonner";
 import { FocusPage } from "@/pages/focus-page";
@@ -104,8 +105,23 @@ export default function App() {
       return;
     }
     startupDatabaseSyncRan.current = true;
-    void getMissingDatabaseReferences()
-      .then(setMissingDatabaseReferences)
+    void (async () => {
+      const raw = await getPlatformApi().readDatabaseRegistry();
+      const entries = raw.trim().length > 0 ? parseDatabaseRegistry(raw) : [];
+      const activeDatabase = getActiveDatabaseEntry(entries);
+      if (activeDatabase) {
+        const loaded = await useAppStore.getState().loadDatabaseFile({
+          location: activeDatabase.location,
+          url: activeDatabase.url
+        });
+        if (!loaded) {
+          toast.error("Couldn't load active database", {
+            description: `The database "${activeDatabase.url}" could not be loaded.`
+          });
+        }
+      }
+      setMissingDatabaseReferences(await getMissingDatabaseReferences());
+    })()
       .catch((error) => {
         toast.error("Couldn't sync databases", {
           description: error instanceof Error ? error.message : "The database registry could not be checked."

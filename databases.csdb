@@ -11,10 +11,12 @@ columns:
   id: text
   location: text
   url: text
+  active_database: boolean
 required:
   - id
   - location
   - url
+  - active_database
 primary_key:
   columns:
     - id
@@ -27,11 +29,7 @@ computed_fields: {}
 comments: {}
 
 --- table:databases:data
-id,location,url
-41e1d9ee-d554-4b40-8672-6a64342b6980,Internal,sdfsdfsdfgdfg
-1990c1af-80a2-49e0-b590-679ed5da80b3,Internal,testtttff
-760a34be-4051-496e-bede-7ce2bb0e75d0,Internal,sdfsdf
-0ef81a2b-3911-4882-976a-6db8fc7bbe0d,Path,/Users/kanoalindiwe/Downloads/strata-log.csdb
-966366de-1c78-4b94-beae-cd3025472e8c,Internal,wsdfsdfsdfsdfsdfsd
-a2156535-c8c9-46eb-ad47-1a1278eec22b,Internal,strata-log
+id,location,url,active_database
+026b377b-d27a-43d6-a88b-78ec1415ac46,Internal,Kanoas,true
+da45ae40-1f53-4914-91f8-373415507df5,Internal,khgbkjhjkb,false
 
