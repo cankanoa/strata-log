@@ -17,9 +17,10 @@ export const TimerService = {
   startLiveEntry(
     file: TimeLogFile,
     metadata: SessionMetadata,
-    now: string
+    now: string,
+    intervalMetadata: SessionMetadata
   ): TimeLogFile {
-    return TimeLogDatabase.startLiveEntry(file, metadata, now);
+    return TimeLogDatabase.startLiveEntry(file, metadata, now, intervalMetadata);
   },
 
   stopLiveEntry(file: TimeLogFile, now: string): TimeLogFile {

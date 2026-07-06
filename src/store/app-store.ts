@@ -160,6 +160,10 @@ function validateEntry(file: TimeLogFile, entry: Omit<EntryInterval, "id"> | Ent
   ];
 }
 
+function pickMetadata(fields: Record<string, FieldDefinition>, metadata: SessionMetadata): SessionMetadata {
+  return Object.fromEntries(Object.keys(fields).map((key) => [key, metadata[key]]));
+}
+
 export const useAppStore = create<StoreState>((set, get) => ({
   file: null,
   fileHandle: null,
@@ -511,17 +515,21 @@ export const useAppStore = create<StoreState>((set, get) => ({
       set({ errors: ["Open a file before starting a timer."] });
       return false;
     }
+    const sessionFields = getSessionFields(current);
+    const intervalFields = getIntervalFields(current);
     const resolvedFields = getResolvedMetadataFields(current);
     const normalizedMetadata = applyResolvedMetadataDefaults(current, normalizeMetadata(resolvedFields, metadata));
+    const sessionMetadata = pickMetadata(sessionFields, normalizedMetadata);
+    const intervalMetadata = pickMetadata(intervalFields, normalizedMetadata);
     const validationErrors = [
-      ...validateMetadataPayload(getSessionFields(current), normalizedMetadata, current),
-      ...validateMetadataPayload(getIntervalFields(current), normalizedMetadata, current)
+      ...validateMetadataPayload(sessionFields, sessionMetadata, current),
+      ...validateMetadataPayload(intervalFields, intervalMetadata, current)
     ];
     if (validationErrors.length > 0) {
       set({ errors: validationErrors });
       return false;
     }
-    const next = TimerService.startLiveEntry(current, normalizedMetadata, toIsoWithOffset(new Date()));
+    const next = TimerService.startLiveEntry(current, sessionMetadata, toIsoWithOffset(new Date()), intervalMetadata);
     set({ file: next, hasUnsavedChanges: true, errors: [] });
     await get().saveCurrentFile();
     return true;
@@ -533,17 +541,21 @@ export const useAppStore = create<StoreState>((set, get) => ({
       set({ errors: ["Open a file before starting a timer."] });
       return false;
     }
+    const sessionFields = getSessionFields(current);
+    const intervalFields = getIntervalFields(current);
     const resolvedFields = getResolvedMetadataFields(current);
     const normalizedMetadata = applyResolvedMetadataDefaults(current, normalizeMetadata(resolvedFields, metadata));
+    const sessionMetadata = pickMetadata(sessionFields, normalizedMetadata);
+    const intervalMetadata = pickMetadata(intervalFields, normalizedMetadata);
     const validationErrors = [
-      ...validateMetadataPayload(getSessionFields(current), normalizedMetadata, current),
-      ...validateMetadataPayload(getIntervalFields(current), normalizedMetadata, current)
+      ...validateMetadataPayload(sessionFields, sessionMetadata, current),
+      ...validateMetadataPayload(intervalFields, intervalMetadata, current)
     ];
     if (validationErrors.length > 0) {
       set({ errors: validationErrors });
       return false;
     }
-    const next = TimerService.startLiveEntry(current, normalizedMetadata, start);
+    const next = TimerService.startLiveEntry(current, sessionMetadata, start, intervalMetadata);
     set({ file: next, hasUnsavedChanges: true, errors: [] });
     await get().saveCurrentFile();
     return true;

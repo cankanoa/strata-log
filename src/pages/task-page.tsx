@@ -1,36 +1,16 @@
-import { useEffect, useState } from "react";
-import { CrepeBuilder } from "@milkdown/crepe";
-import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
-import "@milkdown/crepe/theme/nord.css";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Crepe } from "@milkdown/crepe";
+import "@milkdown/crepe/theme/common/style.css";
+import "@milkdown/crepe/theme/frame.css";
 import { isMarkdownPath } from "@/lib/task-items";
 import { getPlatformApi } from "@/lib/platform";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
 
-type MarkdownViewerProps = {
+type LoadedMarkdown = {
+  path: string;
   markdown: string;
 };
-
-function MarkdownViewer({ markdown }: MarkdownViewerProps) {
-  useEditor(
-    (container) =>
-      new CrepeBuilder({
-        root: container,
-        defaultValue: markdown
-      }).setReadonly(true),
-    [markdown]
-  );
-
-  return <Milkdown />;
-}
-
-function MarkdownSurface({ markdown }: MarkdownViewerProps) {
-  return (
-    <MilkdownProvider>
-      <MarkdownViewer markdown={markdown} />
-    </MilkdownProvider>
-  );
-}
 
 export function TaskPage() {
   const { selectedTaskPath } = useAppStore(
@@ -38,38 +18,98 @@ export function TaskPage() {
       selectedTaskPath: state.selectedTaskPath
     }))
   );
-  const [markdown, setMarkdown] = useState("");
+  const editorRootRef = useRef<HTMLDivElement | null>(null);
+  const crepeRef = useRef<Crepe | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+  const loadRequestRef = useRef(0);
+  const [loaded, setLoaded] = useState<LoadedMarkdown | null>(null);
+
+  const selectedMarkdownPath = selectedTaskPath && isMarkdownPath(selectedTaskPath) ? selectedTaskPath : "";
+
+  const clearPendingSave = useCallback(() => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
-    let alive = true;
+    const requestId = loadRequestRef.current + 1;
+    loadRequestRef.current = requestId;
+    clearPendingSave();
+
+    if (!selectedMarkdownPath) {
+      setLoaded(null);
+      return;
+    }
 
     async function loadMarkdown() {
-      if (!selectedTaskPath || !isMarkdownPath(selectedTaskPath)) {
-        setMarkdown("");
-        return;
-      }
-      const raw = await getPlatformApi().readTextFile(selectedTaskPath);
-      if (alive) {
-        setMarkdown(raw);
+      const markdown = await getPlatformApi().readTextFile(selectedMarkdownPath);
+      if (requestId === loadRequestRef.current) {
+        setLoaded({ path: selectedMarkdownPath, markdown });
       }
     }
 
     void loadMarkdown();
+  }, [clearPendingSave, selectedMarkdownPath]);
+
+  useEffect(() => {
+    const root = editorRootRef.current;
+    if (!root || !loaded) {
+      return;
+    }
+
+    root.replaceChildren();
+    const crepe = new Crepe({
+      root,
+      defaultValue: loaded.markdown,
+      features: {
+        [Crepe.Feature.TopBar]: true
+      }
+    });
+
+    crepe.on((listener) => {
+      listener.markdownUpdated((_, markdown) => {
+        clearPendingSave();
+        saveTimerRef.current = window.setTimeout(() => {
+          void getPlatformApi().saveFile(loaded.path, markdown);
+          saveTimerRef.current = null;
+        }, 600);
+      });
+    });
+
+    crepeRef.current = crepe;
+    void crepe.create();
+
     return () => {
-      alive = false;
+      clearPendingSave();
+      crepeRef.current = null;
+      void crepe.destroy();
     };
-  }, [selectedTaskPath]);
+  }, [clearPendingSave, loaded]);
+
+  useEffect(() => {
+    function saveOnShortcut(event: KeyboardEvent) {
+      if (!loaded || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "s") {
+        return;
+      }
+
+      event.preventDefault();
+      clearPendingSave();
+      const markdown = crepeRef.current?.getMarkdown();
+      if (markdown !== undefined) {
+        void getPlatformApi().saveFile(loaded.path, markdown);
+      }
+    }
+
+    window.addEventListener("keydown", saveOnShortcut);
+    return () => window.removeEventListener("keydown", saveOnShortcut);
+  }, [clearPendingSave, loaded]);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-4 p-5 xl:p-7">
-      <div className="min-h-[720px] rounded-xl border border-border/70 bg-background/70 p-3">
-        {selectedTaskPath && isMarkdownPath(selectedTaskPath) ? (
-          <div className="task-milkdown h-full min-h-[680px]">
-            <MarkdownSurface markdown={markdown} />
-          </div>
-        ) : (
-          <div className="h-full" />
-        )}
+    <main className="mx-auto min-h-screen w-full max-w-6xl p-5 xl:p-7">
+      <div className="min-h-[720px] overflow-hidden rounded-lg border border-border/70 bg-background">
+        {loaded ? <div ref={editorRootRef} className="min-h-[720px]" /> : null}
       </div>
     </main>
   );

@@ -85,7 +85,7 @@ export function normalizeIntervals(entry: EntryInterval): NormalizedSessionInter
         entry.type === "running" &&
         index === intervals.length - 1 &&
         interval.start &&
-        interval.end === interval.start;
+        (!interval.end || interval.end === interval.start);
 
       return {
         start: parseDate(interval.start!),

@@ -34,12 +34,26 @@ describe("TimerService", () => {
 
     expect(started.entries).toHaveLength(1);
     expect(started.entries[0]?.type).toBe("running");
-    expect(started.entries[0]?.intervals?.[0]?.end).toBe("2026-05-24T09:00:00-10:00");
+    expect(started.entries[0]?.intervals?.[0]?.end).toBeUndefined();
 
     const stopped = TimerService.stopLiveEntry(started, "2026-05-24T10:30:00-10:00");
     expect(stopped.entries[0]?.type).toBe("interval");
     expect(stopped.entries[0]?.intervals?.[0]?.end).toBe("2026-05-24T10:30:00-10:00");
     expect(formatDuration(netDurationMs(stopped.entries[0]!))).toBe("01:30");
+  });
+
+  it("round-trips a running entry as an active open interval", () => {
+    const started = TimerService.startLiveEntry(
+      baseFile,
+      { Project: "Strata", Job: "Client Work" },
+      "2026-05-24T09:00:00-10:00",
+      {}
+    );
+
+    const parsed = parseTimeLogYaml(serializeTimeLogYaml(started));
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.file?.entries[0]?.type).toBe("running");
+    expect(parsed.file?.entries[0]?.intervals?.[0]?.end).toBeUndefined();
   });
 
 });

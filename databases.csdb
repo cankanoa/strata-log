@@ -31,5 +31,4 @@ comments: {}
 --- table:databases:data
 id,location,url,active_database
 026b377b-d27a-43d6-a88b-78ec1415ac46,Internal,Kanoas,true
-da45ae40-1f53-4914-91f8-373415507df5,Internal,khgbkjhjkb,false
 

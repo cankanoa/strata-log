@@ -294,10 +294,11 @@ function parseEntries(db: CSDBDatabase, fields: Record<string, FieldDefinition>)
     const intervalRows = intervalRowsBySession.get(sessionId) ?? [];
     entry.intervals = intervalRows.map((intervalRow) => {
       const intervalId = asString(intervalRow.id);
+      const endTime = typeof intervalRow.end_time === "string" ? asString(intervalRow.end_time) : undefined;
       const interval: TimeInterval = {
         id: intervalId,
         start: asString(intervalRow.start_time),
-        end: typeof intervalRow.end_time === "string" ? asString(intervalRow.end_time) : undefined,
+        end: endTime || undefined,
         metadata: {}
       };
 

@@ -598,7 +598,12 @@ export const TimeLogDatabase = {
     };
   },
 
-  startLiveEntry(file: TimeLogFile, metadata: SessionMetadata, now: string): TimeLogFile {
+  startLiveEntry(
+    file: TimeLogFile,
+    metadata: SessionMetadata,
+    now: string,
+    intervalMetadata: SessionMetadata
+  ): TimeLogFile {
     const resolvedFields = getResolvedMetadataFields(file);
     const sessionFields = Object.fromEntries(getSessionMetadataFields(resolvedFields));
     const intervalFields = Object.fromEntries(getIntervalMetadataFields(resolvedFields));
@@ -610,8 +615,7 @@ export const TimeLogDatabase = {
         {
           id: uuidv4(),
           start: now,
-          end: now,
-          metadata: normalizeMetadata(intervalFields, metadata)
+          metadata: normalizeMetadata(intervalFields, intervalMetadata)
         }
       ]
     });
