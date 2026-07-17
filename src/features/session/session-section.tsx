@@ -90,6 +90,8 @@ export function SessionSection() {
   const intervalFields = getIntervalMetadataFieldDefinitions(file?.fields ?? {});
   const sessionGroups = scopeGroups(file?.attributeReferenceGroups ?? [], false);
   const intervalGroups = scopeGroups(file?.attributeReferenceGroups ?? [], true);
+  const hasSessionFields = Object.keys(sessionFields).length > 0 || sessionGroups.some((group) => Object.keys(group.fields).length > 0);
+  const hasIntervalFields = Object.keys(intervalFields).length > 0 || intervalGroups.some((group) => Object.keys(group.fields).length > 0);
 
   useEffect(() => {
     if (!runningEntry) {
@@ -235,27 +237,33 @@ export function SessionSection() {
             </div>
           </div>
 
-          <section className="grid gap-3">
-            <h3 className="text-sm font-medium text-muted-foreground">Session Fields</h3>
-            <MetadataFieldsForm
-              fields={sessionFields}
-              attributeReferenceGroups={sessionGroups}
-              value={trackDraftMetadata}
-              onChange={(metadata) => updateDraftScope(sessionFields, metadata)}
-              onEditOptions={openOptionsEditor}
-            />
-          </section>
+          {hasSessionFields ? (
+            <section className="grid gap-3">
+              <h3 className="text-sm font-medium text-muted-foreground">Session Fields</h3>
+              <MetadataFieldsForm
+                fields={sessionFields}
+                attributeReferenceGroups={sessionGroups}
+                taskSources={file?.taskSources ?? []}
+                value={trackDraftMetadata}
+                onChange={(metadata) => updateDraftScope(sessionFields, metadata)}
+                onEditOptions={openOptionsEditor}
+              />
+            </section>
+          ) : null}
 
-          <section className="grid gap-3">
-            <h3 className="text-sm font-medium text-muted-foreground">Interval Fields</h3>
-            <MetadataFieldsForm
-              fields={intervalFields}
-              attributeReferenceGroups={intervalGroups}
-              value={trackDraftMetadata}
-              onChange={(metadata) => updateDraftScope(intervalFields, metadata)}
-              onEditOptions={openOptionsEditor}
-            />
-          </section>
+          {hasIntervalFields ? (
+            <section className="grid gap-3">
+              <h3 className="text-sm font-medium text-muted-foreground">Interval Fields</h3>
+              <MetadataFieldsForm
+                fields={intervalFields}
+                attributeReferenceGroups={intervalGroups}
+                taskSources={file?.taskSources ?? []}
+                value={trackDraftMetadata}
+                onChange={(metadata) => updateDraftScope(intervalFields, metadata)}
+                onEditOptions={openOptionsEditor}
+              />
+            </section>
+          ) : null}
 
           {!file ? (
             <p className="text-sm text-muted-foreground">
@@ -293,6 +301,7 @@ export function SessionSection() {
           <EntryForm
             fields={file?.fields ?? {}}
             attributeReferenceGroups={file?.attributeReferenceGroups ?? []}
+            taskSources={file?.taskSources ?? []}
             title="Manual Entry"
             submitLabel="Save Entry"
             onSubmit={async (entry) => {

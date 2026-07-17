@@ -3,6 +3,7 @@ export type FieldType =
   | "string"
   | "path"
   | "markdown_glob"
+  | "filter_task_sources"
   | "attribute_reference"
   | "datetime"
   | "bool"
@@ -19,6 +20,40 @@ export type SessionPreset = {
   id: string;
   name: string;
   metadata: SessionMetadata;
+};
+
+export type TaskSourceType = "Markdown" | "Github";
+
+export type TaskSource = {
+  id: string;
+  type: TaskSourceType;
+  url: string;
+  name?: string;
+  accountId?: string;
+};
+
+export type TaskRowStatus = "completed" | undefined;
+
+export type TaskRow = {
+  id: string;
+  sourceId: string;
+  parentTaskId?: string;
+  type: TaskSourceType;
+  url: string;
+  contents: string;
+  status?: TaskRowStatus;
+  rank: string;
+  data: Record<string, unknown>;
+};
+
+export type OnlineAccountType = "Github";
+
+export type OnlineAccount = {
+  id: string;
+  type: OnlineAccountType;
+  name: string;
+  username?: string;
+  token?: string;
 };
 
 export type FieldDefinition = {
@@ -56,6 +91,9 @@ export type TimeLogFile = {
   fields: Record<string, FieldDefinition>;
   attributeReferenceGroups: AttributeReferenceGroup[];
   sessionPresets: SessionPreset[];
+  taskSources: TaskSource[];
+  tasks: TaskRow[];
+  accounts: OnlineAccount[];
   entries: EntryInterval[];
 };
 

@@ -21,6 +21,9 @@ const baseFile: TimeLogFile = {
   },
   attributeReferenceGroups: [],
   sessionPresets: [],
+  taskSources: [],
+  tasks: [],
+  accounts: [],
   entries: []
 };
 
@@ -29,7 +32,8 @@ describe("TimerService", () => {
     const started = TimerService.startLiveEntry(
       baseFile,
       { Project: "Strata", Job: "Client Work" },
-      "2026-05-24T09:00:00-10:00"
+      "2026-05-24T09:00:00-10:00",
+      {}
     );
 
     expect(started.entries).toHaveLength(1);
@@ -86,6 +90,122 @@ describe("CSDB services", () => {
     expect(parsed.errors).toEqual([]);
     expect(parsed.file?.entries[0]?.metadata).toEqual({ Project: "Strata" });
     expect(parsed.file?.entries[0]?.intervals?.[0]?.metadata).toEqual({});
+  });
+
+  it("round-trips task uuids and parent task ids", () => {
+    const file: TimeLogFile = {
+      ...baseFile,
+      taskSources: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440100",
+          type: "Markdown",
+          url: "**/*.md"
+        }
+      ],
+      tasks: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440101",
+          sourceId: "550e8400-e29b-41d4-a716-446655440100",
+          type: "Markdown",
+          url: "/notes/today.md:0|hzzzzz:",
+          contents: "Parent",
+          rank: "0|hzzzzz:",
+          data: { title: "Parent" }
+        },
+        {
+          id: "550e8400-e29b-41d4-a716-446655440102",
+          sourceId: "550e8400-e29b-41d4-a716-446655440100",
+          parentTaskId: "550e8400-e29b-41d4-a716-446655440101",
+          type: "Markdown",
+          url: "/notes/today.md:0|i00007:",
+          contents: "Child",
+          rank: "0|i00007:",
+          data: { title: "Child", parent: "Parent" }
+        }
+      ]
+    };
+
+    const raw = serializeTimeLogYaml(file);
+    expect(raw).toContain("uuid,source_id,parent_task_id,type,url,contents,status,rank,data_json");
+    const parsed = parseTimeLogYaml(raw);
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.file?.tasks[1]?.parentTaskId).toBe(file.tasks[1]?.parentTaskId);
+    expect(parsed.file?.tasks[1]?.data).toEqual(file.tasks[1]?.data);
+  });
+
+  it("round-trips named task sources for generated field options", () => {
+    const file: TimeLogFile = {
+      ...baseFile,
+      fields: {
+        ...baseFile.fields,
+        Source: { type: "filter_task_sources", selection: "select", visibility: "editable" }
+      },
+      taskSources: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440100",
+          name: "Product Backlog",
+          type: "Markdown",
+          url: "**/*.md"
+        }
+      ],
+      entries: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440000",
+          type: "interval",
+          metadata: { Source: "**/*.md" },
+          intervals: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440010",
+              start: "2026-05-24T09:00:00-10:00",
+              end: "2026-05-24T10:00:00-10:00"
+            }
+          ]
+        }
+      ]
+    };
+
+    const raw = serializeTimeLogYaml(file);
+    expect(raw).toContain("id,name,type,url,account_id");
+    const parsed = parseTimeLogYaml(raw);
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.file?.taskSources[0]?.name).toBe("Product Backlog");
+    expect(parsed.file?.entries[0]?.metadata?.Source).toBe("**/*.md");
+  });
+
+  it("rejects unknown task source filter values", () => {
+    const validation = validateFile({
+      ...baseFile,
+      fields: {
+        ...baseFile.fields,
+        Source: { type: "filter_task_sources", selection: "select", visibility: "editable" }
+      },
+      taskSources: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440100",
+          name: "Product Backlog",
+          type: "Markdown",
+          url: "**/*.md"
+        }
+      ],
+      entries: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440000",
+          type: "interval",
+          metadata: { Source: "missing.md" },
+          intervals: [
+            {
+              id: "550e8400-e29b-41d4-a716-446655440010",
+              start: "2026-05-24T09:00:00-10:00",
+              end: "2026-05-24T10:00:00-10:00"
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(validation.errors).toContain("\"Source\" contains an invalid option.");
   });
 
   it("round-trips session presets with stale metadata fields", () => {

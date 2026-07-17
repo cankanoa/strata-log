@@ -3,7 +3,7 @@ import { getFieldSelection, getMetadataFields } from "@/lib/metadata";
 import { resolveEntryMetadata } from "@/lib/attribute-references";
 import type { EntryInterval, FieldDefinition, FileHandleInfo, MetadataValue, TaskItem, TimeLogFile } from "@/lib/types";
 
-type TaskSource = {
+type MarkdownTaskItemSource = {
   id: string;
   kind: "markdown_glob";
   label: string;
@@ -22,21 +22,42 @@ function getMarkdownGlobPatterns(field: FieldDefinition, value: MetadataValue): 
   return typeof value === "string" && value.trim().length > 0 ? [value] : [];
 }
 
+function getSelectedTaskSourceUrls(field: FieldDefinition, value: MetadataValue): string[] {
+  return getMarkdownGlobPatterns(field, value);
+}
+
 export function isMarkdownPath(filePath: string): boolean {
   return /\.md$/i.test(filePath);
 }
 
-export function getTaskSources(file: TimeLogFile | null, entry: EntryInterval | undefined): TaskSource[] {
+export function getTaskSources(file: TimeLogFile | null, entry: EntryInterval | undefined): MarkdownTaskItemSource[] {
   if (!file || !entry) {
     return [];
   }
 
   const resolvedMetadata = resolveEntryMetadata(file, entry);
   const referenceFields = file.attributeReferenceGroups.flatMap((group) =>
-    Object.entries(group.fields).filter(([, field]) => field.type === "markdown_glob")
+    Object.entries(group.fields).filter(([, field]) => field.type === "markdown_glob" || field.type === "filter_task_sources")
   );
+  const metadataFields = [...getMetadataFields(file.fields), ...referenceFields];
+  const sourcesByUrl = new Map(file.taskSources.map((source) => [source.url, source]));
+  const selectedTaskSources = metadataFields
+    .filter(([, field]) => field.type === "filter_task_sources")
+    .flatMap(([key, field]) =>
+      getSelectedTaskSourceUrls(field, resolvedMetadata[key]).flatMap((url) => {
+        const source = sourcesByUrl.get(url);
+        return source?.type === "Markdown"
+          ? [{
+              id: `task_source:${source.id}`,
+              kind: "markdown_glob" as const,
+              label: source.name?.trim() || key,
+              pattern: source.url
+            }]
+          : [];
+      })
+    );
 
-  return [...getMetadataFields(file.fields), ...referenceFields]
+  const markdownGlobSources = metadataFields
     .filter(([, field]) => field.type === "markdown_glob")
     .flatMap(([key, field]) =>
       getMarkdownGlobPatterns(field, resolvedMetadata[key]).map((pattern) => ({
@@ -47,6 +68,8 @@ export function getTaskSources(file: TimeLogFile | null, entry: EntryInterval | 
       }))
     )
     .filter((source) => source.pattern.length > 0);
+
+  return [...markdownGlobSources, ...selectedTaskSources];
 }
 
 export async function loadTaskItems(

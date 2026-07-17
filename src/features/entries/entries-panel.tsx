@@ -22,8 +22,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EntryForm } from "@/features/timer/entry-form";
-import { formatMetadataFieldValue, getSessionMetadataFields } from "@/lib/metadata";
-import { getResolvedMetadataFields, resolveEntryMetadata } from "@/lib/attribute-references";
+import { getSessionMetadataFields } from "@/lib/metadata";
+import { formatMetadataFieldValueForFile, getResolvedMetadataFields, resolveEntryMetadata } from "@/lib/attribute-references";
 import { buildDayDisplayLayout, formatDateTime, formatDuration, getSessionBounds, hourLabel, monthGrid, netDurationMs, weekdayRange } from "@/lib/time";
 import { EntryQueryService } from "@/services/entry-query-service";
 import { useAppStore } from "@/store/app-store";
@@ -270,9 +270,10 @@ export function EntriesPanel() {
       return [];
     }
     return EntryQueryService.sortEntries(
-      EntryQueryService.filterEntries(displayEntries, filters, resolvedFields),
+      EntryQueryService.filterEntries(displayEntries, filters, resolvedFields, file),
       sort,
-      resolvedFields
+      resolvedFields,
+      file
     );
   }, [displayEntries, file, filters, resolvedFields, sort]);
 
@@ -288,7 +289,7 @@ export function EntriesPanel() {
       return "Entry";
     }
     const sourceFields = sessionFields
-      .map(([key, field]) => formatMetadataFieldValue(field, currentEntry.metadata?.[key]))
+      .map(([key, field]) => formatMetadataFieldValueForFile(file, field, currentEntry.metadata?.[key]))
       .find((value) => value !== "—");
     return sourceFields || "Entry";
   }
@@ -369,7 +370,7 @@ export function EntriesPanel() {
                       <TableCell>{formatDuration(netDurationMs(entry))}</TableCell>
                       <TableCell>{entry.intervals?.length ?? 0}</TableCell>
                       {sessionFields.map(([key, field]) => (
-                        <TableCell key={key}>{formatMetadataFieldValue(field, entry.metadata?.[key])}</TableCell>
+                        <TableCell key={key}>{formatMetadataFieldValueForFile(file, field, entry.metadata?.[key])}</TableCell>
                       ))}
                     </TableRow>
                   );
@@ -409,6 +410,7 @@ export function EntriesPanel() {
               <EntryForm
                 fields={file.fields}
                 attributeReferenceGroups={file.attributeReferenceGroups}
+                taskSources={file.taskSources}
                 initialEntry={selectedEntry}
                 submitLabel="Update Entry"
                 chrome="plain"

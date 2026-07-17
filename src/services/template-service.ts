@@ -52,6 +52,9 @@ function createFallbackDefaultTemplate(): TimeLogFile {
     },
     attributeReferenceGroups: [],
     sessionPresets: [],
+    taskSources: [],
+    tasks: [],
+    accounts: [],
     entries: []
   };
 }

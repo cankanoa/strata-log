@@ -28,7 +28,7 @@ import {
   normalizeMetadataValue,
   parseMetadataValueForField
 } from "@/lib/metadata";
-import type { FieldDefinition, MetadataValue } from "@/lib/types";
+import type { FieldDefinition, MetadataValue, TaskSource } from "@/lib/types";
 
 type MetadataValueDialogProps = {
   open: boolean;
@@ -36,6 +36,7 @@ type MetadataValueDialogProps = {
   description: string;
   field: FieldDefinition;
   attributeReferenceGroups?: Array<{ label: string; fields: Record<string, FieldDefinition> }>;
+  taskSources?: TaskSource[];
   initialValue: MetadataValue;
   saveLabel?: string;
   allowClear?: boolean;
@@ -53,6 +54,7 @@ export function MetadataValueDialog({
   description,
   field,
   attributeReferenceGroups = [],
+  taskSources = [],
   initialValue,
   saveLabel = "Save",
   allowClear = false,
@@ -60,7 +62,16 @@ export function MetadataValueDialog({
   onSave
 }: MetadataValueDialogProps) {
   const [value, setValue] = useState<MetadataValue>(initialValue);
-  const optionFile = { version: 1 as const, fields: {}, attributeReferenceGroups, sessionPresets: [], entries: [] };
+  const optionFile = {
+    version: 1 as const,
+    fields: {},
+    attributeReferenceGroups,
+    sessionPresets: [],
+    taskSources,
+    tasks: [],
+    accounts: [],
+    entries: []
+  };
   const effectiveSelection =
     field.type === "attribute_reference" && getFieldSelection(field) !== "multiselect"
       ? "select"

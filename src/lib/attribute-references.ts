@@ -1,7 +1,10 @@
 import {
   applyMetadataDefaults,
+  formatMetadataFieldValue,
+  getFieldOptionDisplayValue,
   getFieldSelection,
   getFieldOptions,
+  getMetadataDisplayValue,
   getIntervalMetadataFieldDefinitions,
   getMetadataFields,
   getSessionMetadataFieldDefinitions,
@@ -10,6 +13,22 @@ import {
   type ParsedFieldOption
 } from "@/lib/metadata";
 import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, MetadataValue, SessionMetadata, TimeLogFile } from "@/lib/types";
+
+export function getTaskSourceFieldOptions(file: TimeLogFile | null | undefined): ParsedFieldOption[] {
+  const seen = new Set<string>();
+  return (file?.taskSources ?? []).flatMap((source) => {
+    const value = source.url.trim();
+    if (!value || seen.has(value)) {
+      return [];
+    }
+    seen.add(value);
+    return [{
+      display: source.name?.trim() || undefined,
+      value,
+      raw: `task-source:${source.id}`
+    }];
+  });
+}
 
 export function getFieldOptionsWithAttributeReferences(
   field: FieldDefinition | undefined,
@@ -43,9 +62,49 @@ export function getSelectableFieldOptions(
     return [];
   }
 
-  return field.type === "attribute_reference"
-    ? getFieldOptionsWithAttributeReferences(field, file)
-    : getFieldOptions(field);
+  if (field.type === "attribute_reference") {
+    return getFieldOptionsWithAttributeReferences(field, file);
+  }
+  if (field.type === "filter_task_sources") {
+    return getTaskSourceFieldOptions(file);
+  }
+  return getFieldOptions(field);
+}
+
+export function getSelectableMetadataChoiceDisplayValue(
+  field: FieldDefinition | undefined,
+  file: TimeLogFile | null | undefined,
+  value: MetadataValue
+): string {
+  if (!field) {
+    return getMetadataDisplayValue(value);
+  }
+
+  const selection = getFieldSelection(field);
+  if (field.type === "attribute_reference" || field.type === "filter_task_sources") {
+    const options = getSelectableFieldOptions(field, file);
+    if (selection === "multiselect") {
+      const values = Array.isArray(value) ? value : [];
+      const labels = values.map((item) => {
+        const match = options.find((option) => option.value === item);
+        return match ? getFieldOptionDisplayValue(match) : String(item);
+      });
+      return labels.length > 0 ? labels.join(", ") : "—";
+    }
+
+    const match = options.find((option) => option.value === value);
+    return match ? getFieldOptionDisplayValue(match) : getMetadataDisplayValue(value);
+  }
+
+  return formatMetadataFieldValue(field, value);
+}
+
+export function formatMetadataFieldValueForFile(
+  file: TimeLogFile | null | undefined,
+  field: FieldDefinition | undefined,
+  value: MetadataValue
+): string {
+  return getSelectableMetadataChoiceDisplayValue(field, file, value);
 }
 
 export function getAttributeReferenceFieldDefinitions(

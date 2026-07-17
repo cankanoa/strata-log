@@ -16,7 +16,17 @@ import {
 } from "@/lib/metadata";
 import { getResolvedMetadataFields } from "@/lib/attribute-references";
 import { normalizeSessionPresets } from "@/lib/session-presets";
-import type { EntryInterval, FieldDefinition, MetadataValue, SessionMetadata, SessionPreset, TimeLogFile } from "@/lib/types";
+import type {
+  EntryInterval,
+  FieldDefinition,
+  MetadataValue,
+  OnlineAccount,
+  SessionMetadata,
+  SessionPreset,
+  TaskRow,
+  TaskSource,
+  TimeLogFile
+} from "@/lib/types";
 import { buildDatabaseFromFile, fileFromDatabase } from "@/lib/yaml";
 
 export type FieldOptionValueResolution = "remove" | "update";
@@ -596,6 +606,71 @@ export const TimeLogDatabase = {
       ...file,
       sessionPresets: normalizeSessionPresets(presets)
     };
+  },
+
+  setTaskSources(file: TimeLogFile, sources: TaskSource[]): TimeLogFile {
+    const sourceIds = new Set(sources.map((source) => source.id));
+    return mutateFile(file, (db) => {
+      db.table("task_sources").all().forEach((row) => {
+        db.table("task_sources").where({ id: String(row.id) }).delete();
+      });
+      if (sources.length > 0) {
+        db.table("task_sources").insert(
+          sources.map((source) => ({
+            id: source.id,
+            name: source.name ?? null,
+            type: source.type,
+            url: source.url,
+            account_id: source.accountId ?? null
+          }))
+        );
+      }
+      db.table("tasks").all().forEach((row) => {
+        if (!sourceIds.has(String(row.source_id))) {
+          db.table("tasks").where({ uuid: String(row.uuid) }).delete();
+        }
+      });
+    });
+  },
+
+  setAccounts(file: TimeLogFile, accounts: OnlineAccount[]): TimeLogFile {
+    return mutateFile(file, (db) => {
+      db.table("accounts").all().forEach((row) => {
+        db.table("accounts").where({ id: String(row.id) }).delete();
+      });
+      if (accounts.length > 0) {
+        db.table("accounts").insert(
+          accounts.map((account) => ({
+            id: account.id,
+            type: account.type,
+            name: account.name,
+            username: account.username ?? null,
+            token: account.token ?? null
+          }))
+        );
+      }
+    });
+  },
+
+  replaceTasksForSource(file: TimeLogFile, sourceId: string, tasks: TaskRow[]): TimeLogFile {
+    return mutateFile(file, (db) => {
+      db.table("tasks").where({ source_id: sourceId }).delete();
+      if (tasks.length > 0) {
+        db.table("tasks").insert(
+          tasks.map((task) => ({
+            uuid: task.id,
+            source_id: task.sourceId,
+            parent_task_id: task.parentTaskId ?? null,
+            type: task.type,
+            url: task.url,
+            contents: task.contents,
+            status: task.status ?? null,
+            rank: task.rank,
+            data_json: JSON.stringify(task.data)
+          }))
+        );
+      }
+    });
   },
 
   startLiveEntry(

@@ -111,7 +111,7 @@ export function FocusPage() {
                 <Button
                   onClick={() => {
                     startFocusTimer();
-                    navigate("/task");
+                    navigate("/markdown");
                   }}
                 >
                   Continue

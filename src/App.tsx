@@ -4,7 +4,7 @@ import { Pause, Play, Square } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { formatDuration, formatDurationWithSeconds, getRunningEntry, netDurationMs } from "@/lib/time";
-import { TaskSidebarBrowser } from "@/components/task/task-sidebar-browser";
+import { MarkdownSidebarBrowser } from "@/components/task/task-sidebar-browser";
 import { DatabaseReferenceSyncDialog } from "@/features/database/database-reference-sync-dialog";
 import { getMissingDatabaseReferences, removeDatabaseReferences, type DatabaseReferenceStatus } from "@/lib/database-registry-sync";
 import { getActiveDatabaseEntry, parseDatabaseRegistry } from "@/lib/database-registry";
@@ -13,7 +13,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { FocusPage } from "@/pages/focus-page";
 import { TrackPage } from "@/pages/track-page";
 import { SettingsPage } from "@/pages/settings-page";
-import { TaskPage } from "@/pages/task-page";
+import { MarkdownPage } from "@/pages/markdown-page";
+import { TasksPage } from "@/pages/task-page";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
 
@@ -166,7 +167,7 @@ export default function App() {
         window.setTimeout(() => scrollToSection("settings-section"), 50);
       }
       if (action === "open-task") {
-        navigate("/task");
+        navigate("/markdown");
       }
     });
   }, [navigate]);
@@ -227,6 +228,12 @@ export default function App() {
                 className={`rounded-xl px-4 py-3 text-sm font-medium transition-colors ${location.pathname === "/settings" ? "bg-primary text-primary-foreground" : "bg-background/90 hover:bg-background"}`}
               >
                 Settings
+              </Link>
+              <Link
+                to="/tasks"
+                className={`rounded-xl px-4 py-3 text-sm font-medium transition-colors ${location.pathname === "/tasks" ? "bg-primary text-primary-foreground" : "bg-background/90 hover:bg-background"}`}
+              >
+                Tasks
               </Link>
             </nav>
             <div className="flex flex-col gap-2">
@@ -317,7 +324,7 @@ export default function App() {
                         return;
                       }
                       startFocusTimer();
-                      navigate("/task");
+                      navigate("/markdown");
                     }}
                   >
                     {focusEndsAt ? <Pause className="size-4" /> : <Play className="size-4" />}
@@ -325,7 +332,7 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <TaskSidebarBrowser />
+            <MarkdownSidebarBrowser />
           </div>
         </aside>
         <div className="min-w-0">
@@ -333,7 +340,9 @@ export default function App() {
             <Route path="/" element={<Navigate to="/track" replace />} />
             <Route path="/track" element={<TrackPage />} />
             <Route path="/focus" element={<FocusPage />} />
-            <Route path="/task" element={<TaskPage />} />
+            <Route path="/markdown" element={<MarkdownPage />} />
+            <Route path="/task" element={<Navigate to="/tasks" replace />} />
+            <Route path="/tasks" element={<TasksPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </div>

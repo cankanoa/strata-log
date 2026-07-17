@@ -11,11 +11,12 @@ import {
   getSessionMetadataFieldDefinitions
 } from "@/lib/metadata";
 import { toIsoWithOffset } from "@/lib/time";
-import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, SessionMetadata, TimeInterval } from "@/lib/types";
+import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, SessionMetadata, TaskSource, TimeInterval } from "@/lib/types";
 
 type EntryFormProps = {
   fields: Record<string, FieldDefinition>;
   attributeReferenceGroups?: AttributeReferenceGroup[];
+  taskSources?: TaskSource[];
   initialEntry?: EntryInterval | null;
   title?: string;
   submitLabel: string;
@@ -91,6 +92,7 @@ function submittedEntry(state: EntryFormState): Omit<EntryInterval, "id"> {
 export function EntryForm({
   fields,
   attributeReferenceGroups = [],
+  taskSources = [],
   initialEntry,
   title = "Manual Entry",
   submitLabel,
@@ -103,6 +105,8 @@ export function EntryForm({
   const intervalFields = useMemo(() => getIntervalMetadataFieldDefinitions(fields), [fields]);
   const sessionGroups = useMemo(() => scopeGroups(attributeReferenceGroups, false), [attributeReferenceGroups]);
   const intervalGroups = useMemo(() => scopeGroups(attributeReferenceGroups, true), [attributeReferenceGroups]);
+  const hasSessionFields = Object.keys(sessionFields).length > 0 || sessionGroups.some((group) => Object.keys(group.fields).length > 0);
+  const hasIntervalFields = Object.keys(intervalFields).length > 0 || intervalGroups.some((group) => Object.keys(group.fields).length > 0);
   const [state, setState] = useState<EntryFormState>(() => buildInitialState(sessionFields, intervalFields, initialEntry));
 
   useEffect(() => {
@@ -185,20 +189,23 @@ export function EntryForm({
           </Button>
         </div>
 
-        <section className="grid gap-3">
-          <h3 className="text-sm font-medium text-muted-foreground">Session Fields</h3>
-          <div className="grid gap-4 rounded-xl border border-border/70 bg-background/70 p-4">
-            <MetadataFieldsForm
-              fields={sessionFields}
-              attributeReferenceGroups={sessionGroups}
-              value={state.metadata}
-              onChange={(metadata) => setState((current) => ({ ...current, metadata }))}
-            />
-          </div>
-        </section>
+        {hasSessionFields ? (
+          <section className="grid gap-3">
+            <h3 className="text-sm font-medium text-muted-foreground">Session Fields</h3>
+            <div className="grid gap-4 rounded-xl border border-border/70 bg-background/70 p-4">
+              <MetadataFieldsForm
+                fields={sessionFields}
+                attributeReferenceGroups={sessionGroups}
+                taskSources={taskSources}
+                value={state.metadata}
+                onChange={(metadata) => setState((current) => ({ ...current, metadata }))}
+              />
+            </div>
+          </section>
+        ) : null}
 
         <section className="grid gap-3">
-          <h3 className="text-sm font-medium text-muted-foreground">Interval Fields</h3>
+          {hasIntervalFields ? <h3 className="text-sm font-medium text-muted-foreground">Interval Fields</h3> : null}
           {state.intervals.map((interval, index) => (
             <div className="grid gap-4 rounded-xl border border-border/70 bg-background/70 p-4" key={interval.id ?? index}>
               <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto]">
@@ -230,12 +237,15 @@ export function EntryForm({
                 </Button>
               </div>
 
-              <MetadataFieldsForm
-                fields={intervalFields}
-                attributeReferenceGroups={intervalGroups}
-                value={interval.metadata ?? {}}
-                onChange={(metadata) => updateInterval(index, { metadata: metadata as SessionMetadata })}
-              />
+              {hasIntervalFields ? (
+                <MetadataFieldsForm
+                  fields={intervalFields}
+                  attributeReferenceGroups={intervalGroups}
+                  taskSources={taskSources}
+                  value={interval.metadata ?? {}}
+                  onChange={(metadata) => updateInterval(index, { metadata: metadata as SessionMetadata })}
+                />
+              ) : null}
             </div>
           ))}
         </section>

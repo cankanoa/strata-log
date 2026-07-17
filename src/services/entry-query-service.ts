@@ -1,6 +1,6 @@
-import type { EntryInterval, EntrySort, FieldDefinition, MetadataFilter } from "@/lib/types";
-import { formatMetadataFieldValue, formatMetadataValue } from "@/lib/metadata";
-import { resolveEntryMetadata } from "@/lib/attribute-references";
+import type { EntryInterval, EntrySort, FieldDefinition, MetadataFilter, TimeLogFile } from "@/lib/types";
+import { formatMetadataValue } from "@/lib/metadata";
+import { formatMetadataFieldValueForFile, resolveEntryMetadata } from "@/lib/attribute-references";
 import {
   buildDayDisplayLayout,
   getSessionBounds,
@@ -11,10 +11,10 @@ import {
 } from "@/lib/time";
 
 export const EntryQueryService = {
-  sortEntries(entries: EntryInterval[], sort: EntrySort, fields?: Record<string, FieldDefinition>): EntryInterval[] {
+  sortEntries(entries: EntryInterval[], sort: EntrySort, fields?: Record<string, FieldDefinition>, file?: TimeLogFile | null): EntryInterval[] {
     const sorted = [...entries].sort((a, b) => {
-      const left = this.resolveSortValue(a, sort.key, fields);
-      const right = this.resolveSortValue(b, sort.key, fields);
+      const left = this.resolveSortValue(a, sort.key, fields, file);
+      const right = this.resolveSortValue(b, sort.key, fields, file);
       if (left < right) {
         return -1;
       }
@@ -26,17 +26,17 @@ export const EntryQueryService = {
     return sort.direction === "asc" ? sorted : sorted.reverse();
   },
 
-  filterEntries(entries: EntryInterval[], filters: MetadataFilter[], fields?: Record<string, FieldDefinition>): EntryInterval[] {
+  filterEntries(entries: EntryInterval[], filters: MetadataFilter[], fields?: Record<string, FieldDefinition>, file?: TimeLogFile | null): EntryInterval[] {
     return entries.filter((entry) =>
       filters.every((filter) => {
         const metadata = resolveEntryMetadata(
-          fields ? { version: 1, fields, attributeReferenceGroups: [], sessionPresets: [], entries: [] } : undefined,
+          file ?? (fields ? { version: 1, fields, attributeReferenceGroups: [], sessionPresets: [], taskSources: [], tasks: [], accounts: [], entries: [] } : undefined),
           entry
         );
         const value =
           filter.field === "status"
             ? (normalizeIntervals(entry).some((interval) => interval.end.getTime() > Date.now()) ? "running" : "stopped")
-            : formatMetadataFieldValue(fields?.[filter.field], metadata?.[filter.field]);
+            : formatMetadataFieldValueForFile(file, fields?.[filter.field], metadata?.[filter.field]);
         return value.toLowerCase().includes(filter.value.toLowerCase());
       })
     );
@@ -50,9 +50,9 @@ export const EntryQueryService = {
     return buildDayDisplayLayout(entries, monthGrid(anchorDate), minimumMinutes);
   },
 
-  resolveSortValue(entry: EntryInterval, key: string, fields?: Record<string, FieldDefinition>): string | number {
+  resolveSortValue(entry: EntryInterval, key: string, fields?: Record<string, FieldDefinition>, file?: TimeLogFile | null): string | number {
     const metadata = resolveEntryMetadata(
-      fields ? { version: 1, fields, attributeReferenceGroups: [], sessionPresets: [], entries: [] } : undefined,
+      file ?? (fields ? { version: 1, fields, attributeReferenceGroups: [], sessionPresets: [], taskSources: [], tasks: [], accounts: [], entries: [] } : undefined),
       entry
     );
     const bounds = getSessionBounds(entry);
@@ -65,6 +65,6 @@ export const EntryQueryService = {
     if (key === "duration") {
       return netDurationMs(entry);
     }
-    return formatMetadataFieldValue(fields?.[key], metadata?.[key]) || formatMetadataValue(metadata?.[key]);
+    return formatMetadataFieldValueForFile(file, fields?.[key], metadata?.[key]) || formatMetadataValue(metadata?.[key]);
   }
 };

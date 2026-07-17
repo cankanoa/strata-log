@@ -136,6 +136,10 @@ function fieldSettingLabel(value: string): string {
     .join(" ");
 }
 
+function fieldCanUseVisibility(field: FieldDefinition, visibility: NonNullable<FieldDefinition["visibility"]>): boolean {
+  return getFieldVisibilityOptions(field).includes(visibility);
+}
+
 function runButtonAction(event: MouseEvent<HTMLButtonElement>, action: () => Promise<void> | void) {
   event.preventDefault();
   event.stopPropagation();
@@ -189,7 +193,7 @@ function FieldCreationRow({
             if (!nextSelectionOptions.includes(selectionDraft)) {
               setSelectionDraft(nextSelectionOptions[0]);
             }
-            if (visibilityDraft === "addable" && !["select", "multiselect"].includes(nextSelectionOptions.includes(selectionDraft) ? selectionDraft : nextSelectionOptions[0])) {
+            if (!fieldCanUseVisibility({ type: nextType, selection: nextSelectionOptions.includes(selectionDraft) ? selectionDraft : nextSelectionOptions[0], visibility: visibilityDraft }, visibilityDraft)) {
               setVisibilityDraft("editable");
             }
           }}
@@ -212,7 +216,7 @@ function FieldCreationRow({
           onValueChange={(value) => {
             const nextSelection = value as NonNullable<FieldDefinition["selection"]>;
             setSelectionDraft(nextSelection);
-            if (visibilityDraft === "addable" && !["select", "multiselect"].includes(nextSelection)) {
+            if (!fieldCanUseVisibility({ type: typeDraft, selection: nextSelection, visibility: visibilityDraft }, visibilityDraft)) {
               setVisibilityDraft("editable");
             }
           }}
@@ -259,7 +263,9 @@ function FieldCreationRow({
         </button>
       </TableCell>
       <TableCell>
-        {supportsOptions(draftField) ? (
+        {draftField.type === "filter_task_sources" ? (
+          <span className="text-sm text-muted-foreground">Task Sources</span>
+        ) : supportsOptions(draftField) ? (
           <FieldCellAction
             value={optionsDraft.map((value) => getFieldOptionDisplayValue(parseFieldOption(value))).join(", ") || "—"}
             onClick={() => onEditOptions(draftField, setOptionsDraft)}
@@ -324,7 +330,7 @@ function FieldRows({
             handlers.onTypeChange(name, {
               ...field,
               selection: nextSelection,
-              visibility: !["select", "multiselect"].includes(nextSelection) && normalizeFieldVisibility(field) === "addable" ? "editable" : field.visibility
+              visibility: fieldCanUseVisibility({ ...field, type: nextType, selection: nextSelection }, normalizeFieldVisibility(field)) ? field.visibility : "editable"
             }, nextType);
           }}
         >
@@ -387,7 +393,9 @@ function FieldRows({
         </button>
       </TableCell>
       <TableCell>
-        {supportsOptions(field) ? (
+        {field.type === "filter_task_sources" ? (
+          <span className="text-sm text-muted-foreground">Task Sources</span>
+        ) : supportsOptions(field) ? (
           <FieldCellAction
             value={getFieldOptions(field).map((option) => getFieldOptionDisplayValue(option)).join(", ") || "—"}
             onClick={() => handlers.onOptionsEdit(name, field)}
@@ -904,7 +912,7 @@ export function DatabaseSection() {
       void updateField(name, withSupportedFieldOptions({
         ...field,
         selection,
-        visibility: selection === "single" && normalizeFieldVisibility(field) === "addable" ? "editable" : field.visibility,
+        visibility: fieldCanUseVisibility({ ...field, selection }, normalizeFieldVisibility(field)) ? field.visibility : "editable",
         options: selection === "single" ? undefined : field.options
       })),
     onIntervalChange: (name, field, interval) => void updateField(name, { ...field, interval }),
@@ -969,7 +977,7 @@ export function DatabaseSection() {
           withSupportedFieldOptions({
             ...field,
             selection,
-            visibility: selection === "single" && normalizeFieldVisibility(field) === "addable" ? "editable" : field.visibility,
+            visibility: fieldCanUseVisibility({ ...field, selection }, normalizeFieldVisibility(field)) ? field.visibility : "editable",
             options: selection === "single" ? undefined : field.options
           })
         ),
@@ -1377,6 +1385,7 @@ export function DatabaseSection() {
           description={valueDialog.description}
           field={valueDialog.field}
           attributeReferenceGroups={file?.attributeReferenceGroups ?? []}
+          taskSources={file?.taskSources ?? []}
           initialValue={valueDialog.initialValue}
           allowClear={valueDialog.allowClear}
           saveLabel="Save"

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { v4 as uuidv4 } from "uuid";
 import {
   applyResolvedMetadataDefaults,
   getIntervalFields,
@@ -14,6 +15,11 @@ import {
   type FieldOptionValueChange,
   type FieldOptionValueResolution
 } from "@/lib/time-log-database";
+import {
+  fetchGithubIssueTasks,
+  isGithubAuthError,
+  syncMarkdownTaskSource
+} from "@/lib/task-sync";
 import { toIsoWithOffset } from "@/lib/time";
 import type {
   AppSnapshot,
@@ -22,8 +28,10 @@ import type {
   FieldDefinition,
   FileHandleInfo,
   MetadataFilter,
+  OnlineAccount,
   SessionPreset,
   SessionMetadata,
+  TaskSource,
   TimeLogFile
 } from "@/lib/types";
 import { parseTimeLogYaml, serializeTimeLogYaml } from "@/lib/yaml";
@@ -78,6 +86,9 @@ type StoreState = AppSnapshot & {
   updateEntry: (entryId: string, entry: EntryInterval) => Promise<boolean>;
   deleteEntry: (entryId: string) => Promise<void>;
   updateSessionPresets: (presets: SessionPreset[]) => Promise<boolean>;
+  updateTaskSources: (sources: TaskSource[]) => Promise<boolean>;
+  updateAccounts: (accounts: OnlineAccount[]) => Promise<boolean>;
+  syncTaskSource: (sourceId: string, githubToken?: string) => Promise<{ ok: boolean; authRequired?: boolean }>;
   startLiveEntry: (metadata: SessionMetadata) => Promise<boolean>;
   startLiveEntryAt: (metadata: SessionMetadata, start: string) => Promise<boolean>;
   stopLiveEntry: () => Promise<void>;
@@ -162,6 +173,13 @@ function validateEntry(file: TimeLogFile, entry: Omit<EntryInterval, "id"> | Ent
 
 function pickMetadata(fields: Record<string, FieldDefinition>, metadata: SessionMetadata): SessionMetadata {
   return Object.fromEntries(Object.keys(fields).map((key) => [key, metadata[key]]));
+}
+
+function dirname(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, "/");
+  const parts = normalized.split("/");
+  parts.pop();
+  return parts.join("/") || ".";
 }
 
 export const useAppStore = create<StoreState>((set, get) => ({
@@ -509,6 +527,113 @@ export const useAppStore = create<StoreState>((set, get) => ({
     return true;
   },
 
+  async updateTaskSources(sources) {
+    const current = get().file;
+    if (!current) {
+      set({ errors: ["Open a file before editing task sources."] });
+      return false;
+    }
+    const next = TimeLogDatabase.setTaskSources(current, sources);
+    const validation = validateFile(next);
+    if (!validation.file) {
+      set({ errors: validation.errors });
+      return false;
+    }
+    set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+    await get().saveCurrentFile();
+    return true;
+  },
+
+  async updateAccounts(accounts) {
+    const current = get().file;
+    if (!current) {
+      set({ errors: ["Open a file before editing online accounts."] });
+      return false;
+    }
+    const next = TimeLogDatabase.setAccounts(current, accounts);
+    const validation = validateFile(next);
+    if (!validation.file) {
+      set({ errors: validation.errors });
+      return false;
+    }
+    set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+    await get().saveCurrentFile();
+    return true;
+  },
+
+  async syncTaskSource(sourceId, githubToken) {
+    const current = get().file;
+    if (!current) {
+      set({ errors: ["Open a file before syncing task sources."] });
+      return { ok: false };
+    }
+    const source = current.taskSources.find((candidate) => candidate.id === sourceId);
+    if (!source) {
+      set({ errors: ["Task source was not found."] });
+      return { ok: false };
+    }
+
+    let workingFile = current;
+    let workingSource = source;
+    if (source.type === "Github" && githubToken?.trim()) {
+      const account: OnlineAccount = {
+        id: source.accountId ?? uuidv4(),
+        type: "Github",
+        name: source.url.replace(/^https:\/\/github\.com\//i, ""),
+        token: githubToken.trim()
+      };
+      const accounts = [
+        ...workingFile.accounts.filter((candidate) => candidate.id !== account.id),
+        account
+      ];
+      const sources = workingFile.taskSources.map((candidate) =>
+        candidate.id === source.id ? { ...candidate, accountId: account.id } : candidate
+      );
+      workingFile = TimeLogDatabase.setTaskSources(TimeLogDatabase.setAccounts(workingFile, accounts), sources);
+      workingSource = sources.find((candidate) => candidate.id === source.id) ?? source;
+    }
+
+    try {
+      const api = getPlatformApi();
+      const handlePath = get().fileHandle?.path;
+      const tasks = workingSource.type === "Markdown"
+        ? syncMarkdownTaskSource(
+            workingFile,
+            workingSource,
+            await Promise.all(
+              (await api.listMarkdownFiles(
+                workingSource.url,
+                handlePath ? dirname(handlePath) : undefined
+              )).map(async (path) => ({
+                path,
+                markdown: await api.readTextFile(path)
+              }))
+            )
+          )
+        : await fetchGithubIssueTasks(
+            workingFile,
+            workingSource,
+            workingFile.accounts.find((account) => account.id === workingSource.accountId)
+          );
+      const next = TimeLogDatabase.replaceTasksForSource(workingFile, sourceId, tasks);
+      const validation = validateFile(next);
+      if (!validation.file) {
+        set({ errors: validation.errors });
+        return { ok: false };
+      }
+      set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+      await get().saveCurrentFile();
+      return { ok: true };
+    } catch (error) {
+      if (workingSource.type === "Github" && isGithubAuthError(error)) {
+        set({ errors: ["GitHub needs an account token for this task source."] });
+        return { ok: false, authRequired: true };
+      }
+      set({ errors: [error instanceof Error ? error.message : "Task source sync failed."] });
+      return { ok: false };
+    }
+  },
+
   async startLiveEntry(metadata) {
     const current = get().file;
     if (!current) {
@@ -529,7 +654,12 @@ export const useAppStore = create<StoreState>((set, get) => ({
       set({ errors: validationErrors });
       return false;
     }
-    const next = TimerService.startLiveEntry(current, sessionMetadata, toIsoWithOffset(new Date()), intervalMetadata);
+    const next = TimerService.startLiveEntry(
+      current,
+      sessionMetadata,
+      toIsoWithOffset(new Date()),
+      intervalMetadata
+    );
     set({ file: next, hasUnsavedChanges: true, errors: [] });
     await get().saveCurrentFile();
     return true;
@@ -555,7 +685,12 @@ export const useAppStore = create<StoreState>((set, get) => ({
       set({ errors: validationErrors });
       return false;
     }
-    const next = TimerService.startLiveEntry(current, sessionMetadata, start, intervalMetadata);
+    const next = TimerService.startLiveEntry(
+      current,
+      sessionMetadata,
+      start,
+      intervalMetadata
+    );
     set({ file: next, hasUnsavedChanges: true, errors: [] });
     await get().saveCurrentFile();
     return true;

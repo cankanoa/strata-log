@@ -29,6 +29,7 @@ import type { MetadataValue, SessionMetadata, TimeLogFile } from "@/lib/types";
 type MetadataFieldsFormProps = {
   fields: TimeLogFile["fields"];
   attributeReferenceGroups?: TimeLogFile["attributeReferenceGroups"];
+  taskSources?: TimeLogFile["taskSources"];
   value: SessionMetadata;
   onChange: (value: SessionMetadata) => void;
   onEditOptions?: (fieldName: string) => void;
@@ -36,16 +37,19 @@ type MetadataFieldsFormProps = {
 
 const EDIT_OPTIONS_VALUE = "__edit_options__";
 
-export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], value, onChange, onEditOptions }: MetadataFieldsFormProps) {
+export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], taskSources = [], value, onChange, onEditOptions }: MetadataFieldsFormProps) {
   const file = useMemo<TimeLogFile>(
     () => ({
       version: 1,
       fields,
       attributeReferenceGroups,
       sessionPresets: [],
+      taskSources,
+      tasks: [],
+      accounts: [],
       entries: []
     }),
-    [attributeReferenceGroups, fields]
+    [attributeReferenceGroups, fields, taskSources]
   );
   const visibleFields = useMemo(() => getActiveMetadataFields(file, value), [file, value]);
 

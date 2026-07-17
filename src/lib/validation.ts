@@ -17,17 +17,18 @@ import {
 import { parseDate } from "@/lib/time";
 import {
   getActiveMetadataFields,
-  getFieldOptionsWithAttributeReferences,
   getResolvedMetadataFields,
+  getSelectableFieldOptions,
   resolveAttributeReferenceMetadata
 } from "@/lib/attribute-references";
-import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, MetadataValue, SessionMetadata, SessionPreset, TimeInterval, TimeLogFile } from "@/lib/types";
+import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, MetadataValue, OnlineAccount, SessionMetadata, SessionPreset, TaskRow, TaskSource, TimeInterval, TimeLogFile } from "@/lib/types";
 
 const fieldTypeSchema = z.enum([
   "uuid",
   "string",
   "path",
   "markdown_glob",
+  "filter_task_sources",
   "attribute_reference",
   "datetime",
   "bool",
@@ -77,6 +78,34 @@ const sessionPresetSchema: z.ZodType<SessionPreset> = z.object({
   metadata: z.record(metadataValueSchema)
 });
 
+const taskSourceSchema: z.ZodType<TaskSource> = z.object({
+  id: z.string().uuid(),
+  type: z.enum(["Markdown", "Github"]),
+  url: z.string(),
+  name: z.string().optional(),
+  accountId: z.string().uuid().optional()
+});
+
+const taskRowSchema: z.ZodType<TaskRow> = z.object({
+  id: z.string().uuid(),
+  sourceId: z.string().uuid(),
+  parentTaskId: z.string().uuid().optional(),
+  type: z.enum(["Markdown", "Github"]),
+  url: z.string(),
+  contents: z.string(),
+  status: z.enum(["completed"]).optional(),
+  rank: z.string(),
+  data: z.record(z.unknown())
+});
+
+const onlineAccountSchema: z.ZodType<OnlineAccount> = z.object({
+  id: z.string().uuid(),
+  type: z.enum(["Github"]),
+  name: z.string(),
+  username: z.string().optional(),
+  token: z.string().optional()
+});
+
 const timeLogSchema: z.ZodType<TimeLogFile> = z.object({
   version: z.literal(1),
   fields: z.record(fieldDefinitionSchema),
@@ -85,6 +114,9 @@ const timeLogSchema: z.ZodType<TimeLogFile> = z.object({
     fields: z.record(fieldDefinitionSchema)
   })),
   sessionPresets: z.array(sessionPresetSchema),
+  taskSources: z.array(taskSourceSchema),
+  tasks: z.array(taskRowSchema),
+  accounts: z.array(onlineAccountSchema),
   entries: z.array(entrySchema)
 });
 
@@ -127,6 +159,7 @@ function validateFieldValue(name: string, field: FieldDefinition, value: Metadat
       return typeof value === "number" ? null : `"${name}" must be a number.`;
     case "string":
     case "path":
+    case "filter_task_sources":
       return typeof value === "string" ? null : `"${name}" must be a string.`;
     case "markdown_glob":
       if (typeof value !== "string") {
@@ -163,6 +196,9 @@ export function validateFieldDefinitions(fields: Record<string, FieldDefinition>
       errors.push(`Field "${key}" must use single selection value.`);
     }
     if (field.type === "attribute_reference" && !["select", "multiselect"].includes(getFieldSelection(field))) {
+      errors.push(`Field "${key}" must use select or multiselect selection value.`);
+    }
+    if (field.type === "filter_task_sources" && !["select", "multiselect"].includes(getFieldSelection(field))) {
       errors.push(`Field "${key}" must use select or multiselect selection value.`);
     }
     if (
@@ -241,6 +277,9 @@ function validateAttributeReferenceGroups(
       if (field.type === "attribute_reference" && !["select", "multiselect"].includes(getFieldSelection(field))) {
         errors.push(`Attribute reference field "${group.label}.${key}" must use select or multiselect selection value.`);
       }
+      if (field.type === "filter_task_sources" && !["select", "multiselect"].includes(getFieldSelection(field))) {
+        errors.push(`Attribute reference field "${group.label}.${key}" must use select or multiselect selection value.`);
+      }
       if (field.default !== undefined && field.default !== null) {
         const defaultError = validateFieldValue(`${group.label}.${key} default`, field, field.default);
         if (defaultError) {
@@ -293,14 +332,18 @@ export function validateMetadataPayload(
     if (!field || isBuiltinField(key)) {
       return [`Metadata field "${key}" is not defined in this file.`];
     }
-    if (field.type === "attribute_reference") {
-      const options = getFieldOptionsWithAttributeReferences(field, file);
+    if (field.type === "attribute_reference" || field.type === "filter_task_sources") {
+      const options = getSelectableFieldOptions(field, file);
+      if (options.length === 0) {
+        const valueError = validateFieldValue(key, field, value);
+        return valueError ? [valueError] : [];
+      }
       const values = getFieldSelection(field) === "multiselect"
         ? (Array.isArray(value) ? value : [])
         : [value];
       return values.every((item) => typeof item === "string" && options.some((option) => option.value === item))
         ? []
-        : [`"${key}" contains an invalid attribute reference.`];
+        : [`"${key}" contains an invalid option.`];
     }
     const valueError = validateFieldValue(key, field, value);
     return valueError ? [valueError] : [];

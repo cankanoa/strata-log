@@ -13,6 +13,7 @@ export const fieldTypeOptions: FieldType[] = [
   "string",
   "path",
   "markdown_glob",
+  "filter_task_sources",
   "attribute_reference",
   "bool",
   "int",
@@ -23,6 +24,7 @@ export const fieldTypeOptions: FieldType[] = [
 
 export const fieldSelectionOptions: FieldSelection[] = ["single", "select", "multiselect"];
 export const attributeReferenceSelectionOptions: FieldSelection[] = ["select", "multiselect"];
+export const taskSourceSelectionOptions: FieldSelection[] = ["select", "multiselect"];
 export const boolSelectionOptions: FieldSelection[] = ["single"];
 export const fieldVisibilityOptions: FieldVisibility[] = ["editable", "viewable", "hidden"];
 export const addableFieldVisibilityOptions: FieldVisibility[] = ["editable", "viewable", "hidden", "addable"];
@@ -34,9 +36,14 @@ export type ParsedFieldOption = {
 };
 
 export function normalizeFieldDefinition(field: FieldDefinition): FieldDefinition {
-  const selection = field.type === "bool" ? "single" : field.selection ?? "single";
+  const rawSelection = field.selection ?? "single";
+  const selection = field.type === "bool"
+    ? "single"
+    : field.type === "filter_task_sources" && !taskSourceSelectionOptions.includes(rawSelection)
+      ? "select"
+      : rawSelection;
   const options =
-    field.type === "bool" || selection === "single"
+    field.type === "bool" || field.type === "filter_task_sources" || selection === "single"
       ? undefined
       : field.options?.filter((value) => value.trim().length > 0);
   const visibility = normalizeFieldVisibility({
@@ -97,6 +104,9 @@ export function getSelectionOptionsForFieldType(type: FieldType): FieldSelection
   if (type === "attribute_reference") {
     return attributeReferenceSelectionOptions;
   }
+  if (type === "filter_task_sources") {
+    return taskSourceSelectionOptions;
+  }
   if (type === "bool") {
     return boolSelectionOptions;
   }
@@ -104,11 +114,11 @@ export function getSelectionOptionsForFieldType(type: FieldType): FieldSelection
 }
 
 export function supportsOptions(field: FieldDefinition | undefined): boolean {
-  return field?.type === "attribute_reference" || getFieldSelection(field) !== "single";
+  return field?.type !== "filter_task_sources" && (field?.type === "attribute_reference" || getFieldSelection(field) !== "single");
 }
 
 export function supportsAddableVisibility(field: FieldDefinition | undefined): boolean {
-  return field ? ["select", "multiselect"].includes(getFieldSelection(field)) : false;
+  return field && field.type !== "filter_task_sources" ? ["select", "multiselect"].includes(getFieldSelection(field)) : false;
 }
 
 export function getFieldVisibilityOptions(field: FieldDefinition | undefined): FieldVisibility[] {
@@ -188,6 +198,7 @@ export function parseMetadataValueForField(field: FieldDefinition | undefined, v
     case "string":
     case "path":
     case "markdown_glob":
+    case "filter_task_sources":
     case "attribute_reference":
     case "datetime":
       return value;

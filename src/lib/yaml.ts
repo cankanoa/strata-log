@@ -14,7 +14,7 @@ import {
   serializeFieldOption
 } from "@/lib/metadata";
 import { getAttributeReferenceFieldDefinitions } from "@/lib/attribute-references";
-import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, MetadataValue, SessionMetadata, SessionPreset, TimeInterval, TimeLogFile } from "@/lib/types";
+import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, MetadataValue, OnlineAccount, SessionMetadata, SessionPreset, TaskRow, TaskSource, TimeInterval, TimeLogFile } from "@/lib/types";
 import { validateFile } from "@/lib/validation";
 
 const EMPTY_DATABASE = `--- csdb
@@ -98,14 +98,62 @@ const METADATA_TABLE: TableSchema = {
   primary_key: { columns: ["id"] }
 };
 
+const TASK_SOURCES_TABLE: TableSchema = {
+  name: "task_sources",
+  columns: {
+    id: "text",
+    name: "text",
+    type: "text",
+    url: "text",
+    account_id: "text"
+  },
+  required: ["id", "type", "url"],
+  primary_key: { columns: ["id"] }
+};
+
+const TASKS_TABLE: TableSchema = {
+  name: "tasks",
+  columns: {
+    uuid: "text",
+    source_id: "text",
+    parent_task_id: "text",
+    type: "text",
+    url: "text",
+    contents: "text",
+    status: "text",
+    rank: "text",
+    data_json: "text"
+  },
+  required: ["uuid", "source_id", "type", "url", "contents", "rank", "data_json"],
+  primary_key: { columns: ["uuid"] }
+};
+
+const ACCOUNTS_TABLE: TableSchema = {
+  name: "accounts",
+  columns: {
+    id: "text",
+    type: "text",
+    name: "text",
+    username: "text",
+    token: "text"
+  },
+  required: ["id", "type", "name"],
+  primary_key: { columns: ["id"] }
+};
+
 const SCHEMAS: TableSchema[] = [
   FIELD_TABLE,
   ATTRIBUTE_REFERENCE_GROUPS_TABLE,
   SESSION_TABLE,
   SESSION_PRESET_TABLE,
   INTERVAL_TABLE,
-  METADATA_TABLE
+  METADATA_TABLE,
+  TASK_SOURCES_TABLE,
+  TASKS_TABLE,
+  ACCOUNTS_TABLE
 ];
+
+const REQUIRED_SCHEMA_NAMES = new Set(SCHEMAS.map((schema) => schema.name));
 
 type ParsedFieldRow = {
   id: string;
@@ -122,13 +170,16 @@ function createDatabase(): CSDBDatabase {
 }
 
 function tableRows(db: CSDBDatabase, tableName: string): Row[] {
+  if (!db.document.tables.has(tableName)) {
+    return [];
+  }
   return db.table(tableName).all();
 }
 
 function missingSchemaTables(db: CSDBDatabase): string[] {
   return SCHEMAS
     .map((schema) => schema.name)
-    .filter((name) => !db.document.tables.has(name));
+    .filter((name) => REQUIRED_SCHEMA_NAMES.has(name) && !db.document.tables.has(name));
 }
 
 function asString(value: unknown): string {
@@ -173,6 +224,17 @@ function parseMetadataJsonText(value: unknown): SessionMetadata {
     const parsed = JSON.parse(asString(value) || "{}");
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? parsed as SessionMetadata
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseObjectJsonText(value: unknown): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(asString(value) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
       : {};
   } catch {
     return {};
@@ -325,6 +387,40 @@ function parseEntries(db: CSDBDatabase, fields: Record<string, FieldDefinition>)
   });
 }
 
+function parseTaskSources(db: CSDBDatabase): TaskSource[] {
+  return tableRows(db, "task_sources").map((row) => ({
+    id: asString(row.id),
+    name: asString(row.name) || undefined,
+    type: asString(row.type) === "Github" ? "Github" : "Markdown",
+    url: asString(row.url),
+    accountId: asString(row.account_id) || undefined
+  }));
+}
+
+function parseTasks(db: CSDBDatabase): TaskRow[] {
+  return tableRows(db, "tasks").map((row) => ({
+    id: asString(row.uuid),
+    sourceId: asString(row.source_id),
+    parentTaskId: asString(row.parent_task_id) || undefined,
+    type: asString(row.type) === "Github" ? "Github" : "Markdown",
+    url: asString(row.url),
+    contents: asString(row.contents),
+    status: asString(row.status) === "completed" ? "completed" : undefined,
+    rank: asString(row.rank),
+    data: parseObjectJsonText(row.data_json)
+  }));
+}
+
+function parseAccounts(db: CSDBDatabase): OnlineAccount[] {
+  return tableRows(db, "accounts").map((row) => ({
+    id: asString(row.id),
+    type: "Github",
+    name: asString(row.name),
+    username: asString(row.username) || undefined,
+    token: asString(row.token) || undefined
+  }));
+}
+
 function parseSessionPresets(db: CSDBDatabase): SessionPreset[] {
   return tableRows(db, "session_presets").map((row) => ({
     id: asString(row.id),
@@ -337,7 +433,12 @@ export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
   const normalizedFile: TimeLogFile = {
     ...file,
     fields: ensureBuiltinFields(file.fields),
-    attributeReferenceGroups: file.attributeReferenceGroups
+    attributeReferenceGroups: file.attributeReferenceGroups,
+    sessionPresets: file.sessionPresets,
+    taskSources: file.taskSources,
+    tasks: file.tasks,
+    accounts: file.accounts,
+    entries: file.entries
   };
 
   const db = createDatabase();
@@ -351,6 +452,31 @@ export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
   const sessionRows: Row[] = [];
   const intervalRows: Row[] = [];
   const metadataRows: Row[] = [];
+  const taskSourceRows: Row[] = normalizedFile.taskSources.map((source) => ({
+    id: source.id,
+    name: source.name ?? null,
+    type: source.type,
+    url: source.url,
+    account_id: source.accountId ?? null
+  }));
+  const taskRows: Row[] = normalizedFile.tasks.map((task) => ({
+    uuid: task.id,
+    source_id: task.sourceId,
+    parent_task_id: task.parentTaskId ?? null,
+    type: task.type,
+    url: task.url,
+    contents: task.contents,
+    status: task.status ?? null,
+    rank: task.rank,
+    data_json: JSON.stringify(task.data)
+  }));
+  const accountRows: Row[] = normalizedFile.accounts.map((account) => ({
+    id: account.id,
+    type: account.type,
+    name: account.name,
+    username: account.username ?? null,
+    token: account.token ?? null
+  }));
 
   normalizedFile.attributeReferenceGroups.forEach((group) => {
     groupRows.push({
@@ -447,6 +573,9 @@ export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
   if (sessionRows.length > 0) db.table("sessions").insert(sessionRows);
   if (intervalRows.length > 0) db.table("intervals").insert(intervalRows);
   if (metadataRows.length > 0) db.table("metadata").insert(metadataRows);
+  if (taskSourceRows.length > 0) db.table("task_sources").insert(taskSourceRows);
+  if (taskRows.length > 0) db.table("tasks").insert(taskRows);
+  if (accountRows.length > 0) db.table("accounts").insert(accountRows);
 
   return db;
 }
@@ -465,7 +594,16 @@ export function fileFromDatabase(db: CSDBDatabase): { file: TimeLogFile | null; 
   const fields = parseFields(db);
   const resolvedFields = {
     ...fields,
-    ...getAttributeReferenceFieldDefinitions({ version: 1, fields, attributeReferenceGroups, sessionPresets: [], entries: [] })
+    ...getAttributeReferenceFieldDefinitions({
+      version: 1,
+      fields,
+      attributeReferenceGroups,
+      sessionPresets: [],
+      taskSources: [],
+      tasks: [],
+      accounts: [],
+      entries: []
+    })
   };
 
   return validateFile({
@@ -473,6 +611,9 @@ export function fileFromDatabase(db: CSDBDatabase): { file: TimeLogFile | null; 
     fields,
     attributeReferenceGroups,
     sessionPresets: parseSessionPresets(db),
+    taskSources: parseTaskSources(db),
+    tasks: parseTasks(db),
+    accounts: parseAccounts(db),
     entries: parseEntries(db, resolvedFields)
   });
 }

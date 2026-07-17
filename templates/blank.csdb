@@ -9,6 +9,9 @@ tables:
   - session_presets
   - intervals
   - metadata
+  - task_sources
+  - tasks
+  - accounts
 
 --- table:fields:schema
 name: fields
@@ -120,3 +123,65 @@ primary_key:
 
 --- table:metadata:data
 id,session_id,interval_id,field_name,value_text
+
+--- table:task_sources:schema
+name: task_sources
+columns:
+  id: text
+  name: text
+  type: text
+  url: text
+  account_id: text
+required:
+  - id
+  - type
+  - url
+primary_key:
+  columns: [id]
+
+--- table:task_sources:data
+id,name,type,url,account_id
+
+--- table:tasks:schema
+name: tasks
+columns:
+  uuid: text
+  source_id: text
+  parent_task_id: text
+  type: text
+  url: text
+  contents: text
+  status: text
+  rank: text
+  data_json: text
+required:
+  - uuid
+  - source_id
+  - type
+  - url
+  - contents
+  - rank
+  - data_json
+primary_key:
+  columns: [uuid]
+
+--- table:tasks:data
+uuid,source_id,parent_task_id,type,url,contents,status,rank,data_json
+
+--- table:accounts:schema
+name: accounts
+columns:
+  id: text
+  type: text
+  name: text
+  username: text
+  token: text
+required:
+  - id
+  - type
+  - name
+primary_key:
+  columns: [id]
+
+--- table:accounts:data
+id,type,name,username,token

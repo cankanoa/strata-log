@@ -9,7 +9,7 @@ import type { TaskItem } from "@/lib/types";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
 
-export function TaskSidebarBrowser() {
+export function MarkdownSidebarBrowser() {
   const navigate = useNavigate();
   const location = useLocation();
   const { file, fileHandle, selectedTaskPath, setSelectedTaskPath } = useAppStore(
@@ -51,20 +51,20 @@ export function TaskSidebarBrowser() {
   return (
     <div className="flex w-full flex-col gap-2">
       <div
-        className={`flex items-center gap-2 rounded-xl px-1 py-1 ${location.pathname === "/task" ? "bg-primary text-primary-foreground" : ""}`}
+        className={`flex items-center gap-2 rounded-xl px-1 py-1 ${location.pathname === "/markdown" ? "bg-primary text-primary-foreground" : ""}`}
       >
         <Link
-          to="/task"
+          to="/markdown"
           className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-            location.pathname === "/task" ? "text-primary-foreground" : "bg-background/90 hover:bg-background"
+            location.pathname === "/markdown" ? "text-primary-foreground" : "bg-background/90 hover:bg-background"
           }`}
         >
-          Task
+          Markdown
         </Link>
         <Button
           type="button"
           size="icon"
-          variant={location.pathname === "/task" ? "secondary" : "ghost"}
+          variant={location.pathname === "/markdown" ? "secondary" : "ghost"}
           className="shrink-0"
           onClick={() => setExpanded((current) => !current)}
         >
@@ -86,7 +86,7 @@ export function TaskSidebarBrowser() {
                 }`}
                 onClick={() => {
                   setSelectedTaskPath(item.path);
-                  navigate("/task");
+                  navigate("/markdown");
                 }}
               >
                 <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
