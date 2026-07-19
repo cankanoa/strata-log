@@ -16,9 +16,21 @@ import {
 } from "@/lib/metadata";
 import { getResolvedMetadataFields } from "@/lib/attribute-references";
 import { normalizeSessionPresets } from "@/lib/session-presets";
+import {
+  INTERNAL_TASK_BODY_COLUMN_NAME,
+  INTERNAL_TASK_STATUS_COLUMN_NAME,
+  INTERNAL_TASK_TITLE_COLUMN_NAME,
+  normalizeInternalTaskColumns,
+  normalizeInternalTaskSources,
+  sanitizeInternalTaskValues
+} from "@/lib/internal-tasks";
+import { extractMarkdownFieldsFromData, hashMarkdownTask } from "@/lib/markdown-task-identity";
 import type {
+  ActiveTaskReference,
   EntryInterval,
   FieldDefinition,
+  GeneralSettings,
+  InternalTaskRow,
   MetadataValue,
   OnlineAccount,
   SessionMetadata,
@@ -100,7 +112,7 @@ function fieldScope(groupLabel?: string): "regular" | "attribute_reference_group
 }
 
 function findFieldRow(db: CSDBDatabase, name: string, groupLabel?: string): Row | undefined {
-  return db.table("fields").where({
+  return db.table("track_fields").where({
     name,
     scope: fieldScope(groupLabel),
     attribute_reference_group_label: groupLabel ?? null
@@ -108,31 +120,31 @@ function findFieldRow(db: CSDBDatabase, name: string, groupLabel?: string): Row 
 }
 
 function deleteEntryRows(db: CSDBDatabase, entryId: string) {
-  const intervalIds = db.table("intervals")
+  const intervalIds = db.table("track_intervals")
     .where({ session_id: entryId })
     .select(["id"])
     .all()
     .map((row) => String(row.id));
 
   intervalIds.forEach((intervalId) => {
-    db.table("metadata").where({ interval_id: intervalId }).delete();
+    db.table("track_metadata").where({ interval_id: intervalId }).delete();
   });
 
-  db.table("metadata").where({ session_id: entryId }).delete();
-  db.table("intervals").where({ session_id: entryId }).delete();
-  db.table("sessions").where({ id: entryId }).delete();
+  db.table("track_metadata").where({ session_id: entryId }).delete();
+  db.table("track_intervals").where({ session_id: entryId }).delete();
+  db.table("track_sessions").where({ id: entryId }).delete();
 }
 
 function insertFieldDefinitionRows(db: CSDBDatabase, name: string, rawField: FieldDefinition, groupLabel?: string) {
   const field = normalizeFieldDefinition(rawField);
-  const existingRow = rawField.id ? db.table("fields").byPrimaryKey(rawField.id) : findFieldRow(db, name, groupLabel);
+  const existingRow = rawField.id ? db.table("track_fields").byPrimaryKey(rawField.id) : findFieldRow(db, name, groupLabel);
   const fieldId = String(existingRow?.id ?? rawField.id ?? uuidv4());
   if (!groupLabel && field.type === "attribute_reference") {
     getFieldOptions(field).forEach((option) => ensureAttributeReferenceGroupRow(db, option.value));
   }
 
   if (existingRow) {
-    db.table("fields").where({ id: fieldId }).update({
+    db.table("track_fields").where({ id: fieldId }).update({
       name,
       type: field.type,
       selection: getFieldSelection(field),
@@ -145,7 +157,7 @@ function insertFieldDefinitionRows(db: CSDBDatabase, name: string, rawField: Fie
       attribute_reference_group_label: groupLabel ?? null
     });
   } else {
-    db.table("fields").insert({
+    db.table("track_fields").insert({
       id: fieldId,
       name,
       type: field.type,
@@ -173,7 +185,7 @@ function insertMetadataRows(
     return;
   }
 
-  db.table("metadata").insert(
+  db.table("track_metadata").insert(
     storedValues.map((valueText) => ({
       id: uuidv4(),
       session_id: owner.sessionId ?? null,
@@ -205,7 +217,7 @@ function insertEntryRows(db: CSDBDatabase, file: TimeLogFile, rawEntry: EntryInt
   const resolvedFields = getResolvedMetadataFields(file);
   const entry = normalizeEntryForStorage(file, rawEntry);
 
-  db.table("sessions").insert({
+  db.table("track_sessions").insert({
     id: entry.id,
     type: entry.type ?? "interval"
   });
@@ -216,7 +228,7 @@ function insertEntryRows(db: CSDBDatabase, file: TimeLogFile, rawEntry: EntryInt
 
   (entry.intervals ?? []).forEach((interval) => {
     const intervalId = interval.id ?? uuidv4();
-    db.table("intervals").insert({
+    db.table("track_intervals").insert({
       id: intervalId,
       session_id: entry.id,
       start_time: interval.start ?? "",
@@ -230,7 +242,7 @@ function insertEntryRows(db: CSDBDatabase, file: TimeLogFile, rawEntry: EntryInt
 }
 
 function latestIntervalRow(db: CSDBDatabase, sessionId: string): Row | undefined {
-  return db.table("intervals").where({ session_id: sessionId }).all().at(-1);
+  return db.table("track_intervals").where({ session_id: sessionId }).all().at(-1);
 }
 
 function selectorFieldNames(file: TimeLogFile): string[] {
@@ -254,11 +266,11 @@ function uniqueLabels(labels: string[]): string[] {
 }
 
 function ensureAttributeReferenceGroupRow(db: CSDBDatabase, label: string) {
-  if (db.table("attribute_reference_groups").byPrimaryKey(label)) {
+  if (db.table("track_attribute_references").byPrimaryKey(label)) {
     return;
   }
 
-  db.table("attribute_reference_groups").insert({ label });
+  db.table("track_attribute_references").insert({ label });
 }
 
 function readFieldOptionLabels(fieldRow: Row): string[] {
@@ -273,7 +285,7 @@ function readFieldOptionLabels(fieldRow: Row): string[] {
 
 function writeFieldOptionLabels(db: CSDBDatabase, fieldId: string, labels: string[]) {
   const nextLabels = uniqueLabels(labels);
-  db.table("fields").where({ id: fieldId }).update({
+  db.table("track_fields").where({ id: fieldId }).update({
     options_json: serializeJsonValue(
       nextLabels.map((label) =>
         serializeFieldOption({
@@ -403,7 +415,7 @@ function countFieldOptionValueUsage(
   field: FieldDefinition,
   storedValue: string
 ): number {
-  let count = db.table("metadata").where({ field_name: name, value_text: storedValue }).all().length;
+  let count = db.table("track_metadata").where({ field_name: name, value_text: storedValue }).all().length;
   function countValue(value: MetadataValue) {
     count += toStoredValues(field, value).filter((item) => item === storedValue).length;
   }
@@ -487,6 +499,79 @@ function optionValueReplacements(
         : parseMetadataValueForField(singleValueField(field), change.nextValue)
     ])
   );
+}
+
+function parseValuesJson(value: unknown): SessionMetadata {
+  try {
+    const parsed = JSON.parse(String(value ?? "{}"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as SessionMetadata
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function setNestedValue(target: Record<string, unknown>, path: string, value: MetadataValue) {
+  const parts = path.replace(/^data:/, "").split(".").filter(Boolean);
+  if (parts.length === 0) {
+    return;
+  }
+  let cursor: Record<string, unknown> = target;
+  parts.slice(0, -1).forEach((part) => {
+    const next = cursor[part];
+    if (!next || typeof next !== "object" || Array.isArray(next)) {
+      cursor[part] = {};
+    }
+    cursor = cursor[part] as Record<string, unknown>;
+  });
+  cursor[parts.at(-1)!] = value;
+}
+
+function openStatus(value: MetadataValue): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const text = Array.isArray(value) || value === undefined ? "" : String(value).toLowerCase();
+  if (["open", "active", "true", "1"].includes(text)) {
+    return true;
+  }
+  if (["closed", "completed", "complete", "done", "false", "0", "x"].includes(text)) {
+    return false;
+  }
+  return undefined;
+}
+
+function setMarkdownFieldMirror(data: Record<string, unknown>, path: string, value: MetadataValue): Record<string, unknown> {
+  if (path === "contents" || path === "title") {
+    return data;
+  }
+  if (path === "status") {
+    return data;
+  }
+  const fieldName = path === "status" ? "Status" : path.replace(/^data:/, "");
+  const fields = extractMarkdownFieldsFromData(data);
+  if (value === undefined || value === null || Array.isArray(value) || String(value).trim().length === 0) {
+    delete fields[fieldName];
+  } else {
+    fields[fieldName] = String(value);
+  }
+  const strata = data.__strata && typeof data.__strata === "object" && !Array.isArray(data.__strata)
+    ? data.__strata as Record<string, unknown>
+    : {};
+  return {
+    ...data,
+    __strata: {
+      ...strata,
+      markdownFields: fields
+    }
+  };
+}
+
+function withMarkdownHash(task: TaskRow, data: Record<string, unknown>, contents: string): TaskRow {
+  return task.type === "Markdown"
+    ? { ...task, contents, hash: hashMarkdownTask(contents, extractMarkdownFieldsFromData(data)), data }
+    : { ...task, contents, data };
 }
 
 function convertFieldSelectionInFile(
@@ -609,19 +694,23 @@ export const TimeLogDatabase = {
   },
 
   setTaskSources(file: TimeLogFile, sources: TaskSource[]): TimeLogFile {
-    const sourceIds = new Set(sources.map((source) => source.id));
+    const normalizedSources = normalizeInternalTaskSources(sources, file.internalTaskColumns);
+    const sourceIds = new Set(normalizedSources.map((source) => source.id));
+    const sourcesById = new Map(normalizedSources.map((source) => [source.id, source]));
     return mutateFile(file, (db) => {
       db.table("task_sources").all().forEach((row) => {
         db.table("task_sources").where({ id: String(row.id) }).delete();
       });
-      if (sources.length > 0) {
+      if (normalizedSources.length > 0) {
         db.table("task_sources").insert(
-          sources.map((source) => ({
+          normalizedSources.map((source) => ({
             id: source.id,
             name: source.name ?? null,
             type: source.type,
             url: source.url,
-            account_id: source.accountId ?? null
+            account_id: source.accountId ?? null,
+            column_names_json: JSON.stringify(source.columnNames ?? []),
+            last_updated_at: source.lastUpdatedAt ?? null
           }))
         );
       }
@@ -630,7 +719,92 @@ export const TimeLogDatabase = {
           db.table("tasks").where({ uuid: String(row.uuid) }).delete();
         }
       });
+      db.table("tasks_internal").all().forEach((row) => {
+        const rowId = String(row.id);
+        const source = sourcesById.get(String(row.task_source_id));
+        if (!source || source.type !== "Internal Task") {
+          db.table("tasks_internal").where({ id: rowId }).delete();
+          return;
+        }
+        db.table("tasks_internal").where({ id: rowId }).update({
+          values_json: JSON.stringify(
+            sanitizeInternalTaskValues(
+              parseValuesJson(row.values_json),
+              file.internalTaskColumns,
+              source.columnNames ?? []
+            )
+          )
+        });
+      });
     });
+  },
+
+  setInternalTaskColumns(file: TimeLogFile, columns: Record<string, FieldDefinition>): TimeLogFile {
+    const normalizedColumns = normalizeInternalTaskColumns(columns);
+    const sources = normalizeInternalTaskSources(file.taskSources, normalizedColumns);
+    const nextFile: TimeLogFile = {
+      ...file,
+      taskSources: sources,
+      internalTaskColumns: normalizedColumns,
+      internalTasks: file.internalTasks.map((task) => {
+        const source = sources.find((candidate) => candidate.id === task.taskSourceId);
+        return {
+          ...task,
+          values: sanitizeInternalTaskValues(task.values, normalizedColumns, source?.columnNames ?? [])
+        };
+      })
+    };
+    return readFile(buildDatabaseFromFile(nextFile));
+  },
+
+  renameInternalTaskColumn(file: TimeLogFile, previousName: string, nextName: string): TimeLogFile {
+    const field = file.internalTaskColumns[previousName];
+    if (!field || [INTERNAL_TASK_TITLE_COLUMN_NAME, INTERNAL_TASK_STATUS_COLUMN_NAME, INTERNAL_TASK_BODY_COLUMN_NAME].includes(previousName) || previousName === nextName || file.internalTaskColumns[nextName]) {
+      return file;
+    }
+    const columns = Object.fromEntries(
+      Object.entries(file.internalTaskColumns).map(([name, value]) => [name === previousName ? nextName : name, value])
+    );
+    const nextFile: TimeLogFile = {
+      ...file,
+      internalTaskColumns: columns,
+      taskSources: file.taskSources.map((source) => ({
+        ...source,
+        columnNames: source.columnNames?.map((name) => name === previousName ? nextName : name)
+      })),
+      internalTasks: file.internalTasks.map((task) => {
+        if (!(previousName in task.values)) {
+          return task;
+        }
+        const { [previousName]: previousValue, ...values } = task.values;
+        return {
+          ...task,
+          values: {
+            ...values,
+            [nextName]: previousValue
+          }
+        };
+      })
+    };
+    return readFile(buildDatabaseFromFile(nextFile));
+  },
+
+  setInternalTasks(file: TimeLogFile, tasks: InternalTaskRow[]): TimeLogFile {
+    const sourcesById = new Map(file.taskSources.map((source) => [source.id, source]));
+    const nextTasks = tasks.flatMap((task) => {
+      const source = sourcesById.get(task.taskSourceId);
+      return source?.type === "Internal Task"
+        ? [{
+            ...task,
+            values: sanitizeInternalTaskValues(task.values, file.internalTaskColumns, source.columnNames ?? [])
+          }]
+        : [];
+    });
+    return readFile(buildDatabaseFromFile({ ...file, internalTasks: nextTasks }));
+  },
+
+  setActiveTasks(file: TimeLogFile, activeTasks: ActiveTaskReference[]): TimeLogFile {
+    return readFile(buildDatabaseFromFile({ ...file, activeTasks }));
   },
 
   setAccounts(file: TimeLogFile, accounts: OnlineAccount[]): TimeLogFile {
@@ -652,6 +826,61 @@ export const TimeLogDatabase = {
     });
   },
 
+  setSettings(file: TimeLogFile, settings: GeneralSettings): TimeLogFile {
+    return readFile(buildDatabaseFromFile({ ...file, settings }));
+  },
+
+  setTaskFieldValue(file: TimeLogFile, taskId: string, path: string, value: MetadataValue): TimeLogFile {
+    const updatedAt = new Date().toISOString();
+    const nextTasks = file.tasks.map((task) => {
+      if (task.id !== taskId) {
+        return task;
+      }
+      const data = { ...task.data };
+      if (path === "contents" || path === "title") {
+        data.title = value;
+        data.content = value;
+        const contents = typeof value === "string" ? value : task.contents;
+        return withMarkdownHash({
+          ...task,
+          contents,
+          updatedAt
+        }, data, contents);
+      }
+      if (path === "status") {
+        const status = openStatus(value);
+        data.status = status;
+        data.checked = status === false;
+        const nextData = task.type === "Markdown" ? setMarkdownFieldMirror(data, path, value) : data;
+        return withMarkdownHash({
+          ...task,
+          status,
+          updatedAt
+        }, nextData, task.contents);
+      }
+      setNestedValue(data, path, value);
+      const nextData = task.type === "Markdown" ? setMarkdownFieldMirror(data, path, value) : data;
+      return withMarkdownHash({
+        ...task,
+        updatedAt
+      }, nextData, task.contents);
+    });
+    const nextInternalTasks = file.internalTasks.map((task) => {
+      if (task.id !== taskId) {
+        return task;
+      }
+      const name = path === "contents" || path === "title" ? INTERNAL_TASK_TITLE_COLUMN_NAME : path.replace(/^data:/, "");
+      return {
+        ...task,
+        values: {
+          ...task.values,
+          [name]: value
+        }
+      };
+    });
+    return readFile(buildDatabaseFromFile({ ...file, tasks: nextTasks, internalTasks: nextInternalTasks }));
+  },
+
   replaceTasksForSource(file: TimeLogFile, sourceId: string, tasks: TaskRow[]): TimeLogFile {
     return mutateFile(file, (db) => {
       db.table("tasks").where({ source_id: sourceId }).delete();
@@ -666,6 +895,9 @@ export const TimeLogDatabase = {
             contents: task.contents,
             status: task.status ?? null,
             rank: task.rank,
+            hash: task.hash ?? null,
+            byte_length: task.byteLength ?? null,
+            updated_at: task.updatedAt ?? null,
             data_json: JSON.stringify(task.data)
           }))
         );
@@ -698,7 +930,7 @@ export const TimeLogDatabase = {
 
   stopLiveEntry(file: TimeLogFile, now: string): TimeLogFile {
     return mutateFile(file, (db) => {
-      const running = db.table("sessions").where({ type: "running" }).first();
+      const running = db.table("track_sessions").where({ type: "running" }).first();
       if (!running) {
         return;
       }
@@ -709,8 +941,8 @@ export const TimeLogDatabase = {
         return;
       }
 
-      db.table("intervals").where({ id: String(interval.id) }).update({ end_time: now });
-      db.table("sessions").where({ id: sessionId }).update({ type: "interval" });
+      db.table("track_intervals").where({ id: String(interval.id) }).update({ end_time: now });
+      db.table("track_sessions").where({ id: sessionId }).update({ type: "interval" });
     });
   },
 
@@ -726,9 +958,9 @@ export const TimeLogDatabase = {
       if (!existingRow) {
         return;
       }
-      db.table("fields").where({ id: String(existingRow.id) }).update({ name: nextName });
+      db.table("track_fields").where({ id: String(existingRow.id) }).update({ name: nextName });
       if (!groupLabel) {
-        db.table("metadata").where({ field_name: previousName }).update({ field_name: nextName });
+        db.table("track_metadata").where({ field_name: previousName }).update({ field_name: nextName });
       }
     });
   },
@@ -803,14 +1035,14 @@ export const TimeLogDatabase = {
     const replacements = optionValueReplacements(nextField, changes);
     const fieldRow = findFieldRow(db, name);
     if (fieldRow) {
-      db.table("fields").where({ id: String(fieldRow.id) }).update({
+      db.table("track_fields").where({ id: String(fieldRow.id) }).update({
         options_json: serializeFieldOptionsJson(nextField),
         default_json: serializeJsonValue(resolveOptionValue(currentField, currentField.default ?? undefined, replacements, resolution))
       });
     }
 
     changes.forEach((change) => {
-      const query = db.table("metadata").where({ field_name: name, value_text: change.previousValue });
+      const query = db.table("track_metadata").where({ field_name: name, value_text: change.previousValue });
       if (resolution === "update" && change.nextValue !== undefined) {
         query.update({ value_text: change.nextValue });
         return;
@@ -818,7 +1050,7 @@ export const TimeLogDatabase = {
       query.delete();
     });
 
-    db.table("session_presets").all().forEach((presetRow) => {
+    db.table("track_session_presets").all().forEach((presetRow) => {
       const metadata = resolveMetadataOptionValues(
         JSON.parse(String(presetRow.metadata_json ?? "{}")) as SessionMetadata,
         name,
@@ -826,7 +1058,7 @@ export const TimeLogDatabase = {
         replacements,
         resolution
       );
-      db.table("session_presets").where({ id: String(presetRow.id) }).update({
+      db.table("track_session_presets").where({ id: String(presetRow.id) }).update({
         metadata_json: JSON.stringify(metadata)
       });
     });
@@ -871,22 +1103,22 @@ export const TimeLogDatabase = {
       }
       const fieldId = String(existingRow.id);
       if (!groupLabel) {
-        db.table("metadata").where({ field_name: name }).delete();
+        db.table("track_metadata").where({ field_name: name }).delete();
       }
-      db.table("fields").where({ id: fieldId }).delete();
+      db.table("track_fields").where({ id: fieldId }).delete();
     });
   },
 
   addAttributeReferenceGroup(file: TimeLogFile, label: string): TimeLogFile {
     return mutateFile(file, (db) => {
-      db.table("attribute_reference_groups").insert({ label });
+      db.table("track_attribute_references").insert({ label });
     });
   },
 
   renameAttributeReferenceGroup(file: TimeLogFile, groupLabel: string, label: string): TimeLogFile {
     return mutateFile(file, (db) => {
-      db.table("attribute_reference_groups").where({ label: groupLabel }).update({ label });
-      db.table("fields").where({ attribute_reference_group_label: groupLabel }).update({
+      db.table("track_attribute_references").where({ label: groupLabel }).update({ label });
+      db.table("track_fields").where({ attribute_reference_group_label: groupLabel }).update({
         attribute_reference_group_label: label
       });
     });
@@ -894,8 +1126,8 @@ export const TimeLogDatabase = {
 
   deleteAttributeReferenceGroup(file: TimeLogFile, groupLabel: string): TimeLogFile {
     return mutateFile(file, (db) => {
-      db.table("fields").where({ attribute_reference_group_label: groupLabel }).delete();
-      db.table("fields")
+      db.table("track_fields").where({ attribute_reference_group_label: groupLabel }).delete();
+      db.table("track_fields")
         .where({ type: "attribute_reference" })
         .all()
         .forEach((row) => {
@@ -907,12 +1139,12 @@ export const TimeLogDatabase = {
             }
           })();
           const nextOptions = options.filter((option) => parseFieldOption(option).value !== groupLabel);
-          db.table("fields").where({ id: String(row.id) }).update({ options_json: serializeJsonValue(nextOptions) });
+          db.table("track_fields").where({ id: String(row.id) }).update({ options_json: serializeJsonValue(nextOptions) });
         });
-      db.table("attribute_reference_groups").where({ label: groupLabel }).delete();
+      db.table("track_attribute_references").where({ label: groupLabel }).delete();
 
       selectorFieldNames(file).forEach((fieldName) => {
-        db.table("metadata").where({ field_name: fieldName, value_text: groupLabel }).delete();
+        db.table("track_metadata").where({ field_name: fieldName, value_text: groupLabel }).delete();
       });
     });
   },

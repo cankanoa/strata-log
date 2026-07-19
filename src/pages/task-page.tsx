@@ -1,4 +1,5 @@
-import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   ArrowDown,
   ArrowDownWideNarrow,
@@ -8,26 +9,31 @@ import {
   Columns3Cog,
   Filter,
   LayoutList,
+  Pencil,
   Plus,
+  Trash2,
   X
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { MarkdownValueDialog } from "@/components/forms/markdown-value-dialog";
+import { MetadataValueDialog } from "@/features/database/metadata-value-dialog";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { taskSourceLabel } from "@/lib/task-query";
-import type { TaskRow, TaskSource } from "@/lib/types";
+import { getFieldSelection } from "@/lib/metadata";
+import { INTERNAL_TASK_BODY_COLUMN_NAME, INTERNAL_TASK_STATUS_COLUMN_NAME, INTERNAL_TASK_TITLE_COLUMN_NAME } from "@/lib/internal-tasks";
+import { taskDisplayRows, taskReferenceKey, taskSourceLabel } from "@/lib/task-query";
+import type { ActiveTaskReference, FieldDefinition, MetadataValue, TaskDisplayRow, TaskFieldMetadata, TaskSource, TaskSourceType } from "@/lib/types";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
 
 type TaskTreeRow = {
-  task: TaskRow;
+  task: TaskDisplayRow;
   depth: number;
-  children: TaskRow[];
+  children: TaskDisplayRow[];
 };
 
 type TaskTableValueType = "string" | "number" | "bool" | "datetime" | "multi";
@@ -37,7 +43,8 @@ type TaskTableColumn = {
   title: string;
   type: TaskTableValueType;
   defaultVisible?: boolean;
-  value: (task: TaskRow, sourcesById: Map<string, TaskSource>) => unknown;
+  value: (task: TaskDisplayRow, sourcesById: Map<string, TaskSource>) => unknown;
+  render?: (task: TaskDisplayRow, sourcesById: Map<string, TaskSource>) => ReactNode;
 };
 
 type ColumnState = {
@@ -76,7 +83,7 @@ type SortState = {
 
 type TaskViewMode = "small-table" | "large-table";
 
-function sortTasks(tasks: TaskRow[], sourcesById: Map<string, TaskSource>): TaskRow[] {
+function sortTasks(tasks: TaskDisplayRow[], sourcesById: Map<string, TaskSource>): TaskDisplayRow[] {
   return [...tasks].sort((left, right) => {
     const sourceCompare = taskSourceLabel(sourcesById.get(left.sourceId)).localeCompare(taskSourceLabel(sourcesById.get(right.sourceId)));
     return sourceCompare === 0 ? left.rank.localeCompare(right.rank) : sourceCompare;
@@ -93,6 +100,22 @@ function getPathValue(value: unknown, path: string): unknown {
     }
     return typeof current === "object" ? (current as Record<string, unknown>)[part] : undefined;
   }, value);
+}
+
+function editablePathForColumn(column: TaskTableColumn): string | null {
+  if (column.id === "contents") {
+    return "title";
+  }
+  if (column.id === "body") {
+    return "body";
+  }
+  if (column.id === "status") {
+    return "status";
+  }
+  if (column.id.startsWith("data:")) {
+    return column.id.slice("data:".length);
+  }
+  return null;
 }
 
 function flattenPaths(value: unknown, prefix = ""): string[] {
@@ -133,19 +156,50 @@ function inferColumnType(values: unknown[]): TaskTableValueType {
   return "string";
 }
 
-function taskColumns(tasks: TaskRow[]): TaskTableColumn[] {
+function taskColumns(
+  tasks: TaskDisplayRow[],
+  internalTaskColumns: Record<string, FieldDefinition>,
+  activeTaskKeys: Set<string>,
+  onActiveChange: (task: TaskDisplayRow, active: boolean) => void
+): TaskTableColumn[] {
   const standardColumns: TaskTableColumn[] = [
+    {
+      id: "active",
+      title: "Active",
+      type: "bool",
+      defaultVisible: true,
+      value: (task) => activeTaskKeys.has(taskReferenceKey({ taskId: task.id, table: task.taskTable })),
+      render: (task) => (
+        <Switch
+          checked={activeTaskKeys.has(taskReferenceKey({ taskId: task.id, table: task.taskTable }))}
+          onCheckedChange={(active) => onActiveChange(task, active)}
+        />
+      )
+    },
     { id: "type", title: "Type", type: "string", defaultVisible: true, value: (task) => task.type },
     { id: "contents", title: "Title", type: "string", defaultVisible: true, value: (task) => task.contents },
+    { id: "body", title: "Body", type: "string", defaultVisible: true, value: (task) => getPathValue(task.data, "body") },
     { id: "source", title: "Source", type: "string", defaultVisible: true, value: (task, sourcesById) => taskSourceLabel(sourcesById.get(task.sourceId)) },
-    { id: "status", title: "Status", type: "string", defaultVisible: true, value: (task) => task.status ?? "open" },
+    { id: "status", title: "Status", type: "string", defaultVisible: true, value: (task) => task.status === false ? "Closed" : "Open" },
     { id: "url", title: "URL", type: "string", defaultVisible: true, value: (task) => task.url },
     { id: "uuid", title: "UUID", type: "string", defaultVisible: false, value: (task) => task.id },
     { id: "parentTaskId", title: "Parent Task", type: "string", defaultVisible: false, value: (task) => task.parentTaskId },
     { id: "rank", title: "Rank", type: "string", defaultVisible: false, value: (task) => task.rank },
+    { id: "hash", title: "Hash", type: "string", defaultVisible: false, value: (task) => task.hash },
+    { id: "byteLength", title: "Byte Length", type: "number", defaultVisible: false, value: (task) => task.byteLength },
     { id: "data", title: "Data", type: "string", defaultVisible: false, value: (task) => task.data }
   ];
-  const dataPaths = [...new Set(tasks.flatMap((task) => flattenPaths(task.data)))].sort((left, right) => left.localeCompare(right));
+  const standardDataPaths = new Set<string>([
+    INTERNAL_TASK_TITLE_COLUMN_NAME,
+    INTERNAL_TASK_STATUS_COLUMN_NAME,
+    INTERNAL_TASK_BODY_COLUMN_NAME
+  ]);
+  const dataPaths = [
+    ...new Set([
+      ...tasks.flatMap((task) => flattenPaths(task.data)),
+      ...Object.keys(internalTaskColumns)
+    ])
+  ].filter((path) => !standardDataPaths.has(path)).sort((left, right) => left.localeCompare(right));
   const dataColumns = dataPaths.map<TaskTableColumn>((path) => ({
     id: `data:${path}`,
     title: path,
@@ -167,6 +221,72 @@ function formatCellValue(value: unknown): string {
     return JSON.stringify(value);
   }
   return String(value);
+}
+
+function fieldMetadataToDefinition(field: TaskFieldMetadata): FieldDefinition {
+  return {
+    type: field.type === "markdown" ? "markdown" : field.type === "number" ? "float" : field.type === "bool" ? "bool" : field.type === "datetime" ? "datetime" : "string",
+    selection: field.type === "multiselect" ? "multiselect" : field.type === "select" ? "select" : "single",
+    visibility: "editable",
+    options: field.options
+  };
+}
+
+function draftInputText(value: MetadataValue): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  return Array.isArray(value) ? value.map(String).join(", ") : String(value);
+}
+
+function parseDraftInput(field: TaskFieldMetadata, value: string): MetadataValue {
+  if (field.type === "number") {
+    const parsed = Number.parseFloat(value);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+  if (field.type === "multiselect") {
+    return value.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  return value;
+}
+
+function getFieldTypeFromSelection(field: FieldDefinition): TaskFieldMetadata["type"] {
+  if (field.type === "markdown") {
+    return "markdown";
+  }
+  const selection = getFieldSelection(field);
+  return selection === "multiselect" ? "multiselect" : selection === "select" ? "select" : "string";
+}
+
+function taskFieldValue(task: TaskDisplayRow, path: string): MetadataValue {
+  const raw = path === "title"
+    ? task.contents
+    : path === "status"
+      ? task.status ?? true
+      : getPathValue(task.data, path);
+  if (Array.isArray(raw)) {
+    return raw.map((item) => {
+      if (item && typeof item === "object" && "name" in item) {
+        return String((item as { name?: unknown }).name ?? "");
+      }
+      if (item && typeof item === "object" && "login" in item) {
+        return String((item as { login?: unknown }).login ?? "");
+      }
+      return typeof item === "string" || typeof item === "number" || typeof item === "boolean" ? item : JSON.stringify(item);
+    }).filter((item): item is string | number | boolean => item !== "");
+  }
+  if (raw && typeof raw === "object") {
+    if ("title" in raw) {
+      return String((raw as { title?: unknown }).title ?? "");
+    }
+    if ("name" in raw) {
+      return String((raw as { name?: unknown }).name ?? "");
+    }
+    if ("login" in raw) {
+      return String((raw as { login?: unknown }).login ?? "");
+    }
+  }
+  return typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean" ? raw : undefined;
 }
 
 function controlId() {
@@ -481,6 +601,131 @@ function SelectTriggerText({ value, placeholder }: { value?: string; placeholder
   return <span className={value ? "min-w-0 flex-1 truncate text-left" : "min-w-0 flex-1 truncate text-left text-muted-foreground"}>{value ?? placeholder}</span>;
 }
 
+function MarkdownDraftButton({
+  field,
+  value,
+  onChange
+}: {
+  field: TaskFieldMetadata;
+  value: MetadataValue;
+  onChange: (value: MetadataValue) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const preview = typeof value === "string" && value.trim().length > 0 ? value : undefined;
+
+  return (
+    <>
+      <Button type="button" variant="outline" className="w-full min-w-32 justify-start" onClick={() => setOpen(true)}>
+        <SelectTriggerText value={preview} placeholder={field.label} />
+      </Button>
+      <MarkdownValueDialog
+        open={open}
+        title={field.label}
+        description="Edit this markdown value."
+        initialValue={value}
+        onOpenChange={setOpen}
+        onSave={(nextValue) => {
+          onChange(nextValue);
+          setOpen(false);
+        }}
+      />
+    </>
+  );
+}
+
+function TaskDraftInput({
+  field,
+  value,
+  onChange
+}: {
+  field: TaskFieldMetadata;
+  value: MetadataValue;
+  onChange: (value: MetadataValue) => void;
+}) {
+  if (field.type === "markdown") {
+    return <MarkdownDraftButton field={field} value={value} onChange={onChange} />;
+  }
+
+  if (field.type === "bool") {
+    const trueLabel = field.options?.[0] ?? "True";
+    const falseLabel = field.options?.[1] ?? "False";
+    return (
+      <Select value={typeof value === "boolean" ? String(value) : undefined} onValueChange={(nextValue) => onChange(nextValue === "true")}>
+        <SelectTrigger className="w-full min-w-28">
+          <SelectTriggerText value={typeof value === "boolean" ? (value ? trueLabel : falseLabel) : undefined} placeholder={field.label} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="true">{trueLabel}</SelectItem>
+          <SelectItem value="false">{falseLabel}</SelectItem>
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  if (field.type === "select" && field.options?.length) {
+    const selected = typeof value === "string" ? value : undefined;
+    return (
+      <Select value={selected} onValueChange={(nextValue) => nextValue !== null && onChange(nextValue)}>
+        <SelectTrigger className="w-full min-w-32">
+          <SelectTriggerText value={selected} placeholder={field.label} />
+        </SelectTrigger>
+        <SelectContent>
+          {field.options.map((option) => (
+            <SelectItem key={option} value={option}>
+              {option}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  return (
+    <Input
+      className="min-w-32"
+      type={field.type === "number" ? "number" : field.type === "datetime" ? "datetime-local" : "text"}
+      value={draftInputText(value)}
+      placeholder={field.type === "multiselect" ? `${field.label}, ...` : field.label}
+      onChange={(event) => onChange(parseDraftInput(field, event.target.value))}
+    />
+  );
+}
+
+function statusFieldForSource(source: TaskSource): TaskFieldMetadata {
+  return {
+    sourceId: source.id,
+    path: "status",
+    label: "Status",
+    type: "bool",
+    editable: true,
+    options: ["Open", "Closed"],
+    updateKind: source.type === "Github" ? "github_issue" : "markdown_field"
+  };
+}
+
+function TaskStatusSelect({
+  disabled,
+  task,
+  onChange
+}: {
+  disabled?: boolean;
+  task: TaskDisplayRow;
+  onChange: (open: boolean) => void;
+}) {
+  const value = task.status === false ? "closed" : "open";
+  return (
+    <Select value={value} disabled={disabled} onValueChange={(nextValue) => onChange(nextValue === "open")}>
+      <SelectTrigger className="w-full min-w-28">
+        <SelectTriggerText value={value === "open" ? "Open" : "Closed"} placeholder="Status" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="open">Open</SelectItem>
+        <SelectItem value="closed">Closed</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
 function FilterValueField({
   column,
   filter,
@@ -729,12 +974,12 @@ function syncColumnState(columns: TaskTableColumn[], state: ColumnState[]): Colu
 }
 
 function buildTaskTreeRows(
-  tasks: TaskRow[],
+  tasks: TaskDisplayRow[],
   sourcesById: Map<string, TaskSource>,
   expandedIds: Set<string>
 ): { rows: TaskTreeRow[]; expandableIds: string[] } {
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
-  const childrenByParent = new Map<string, TaskRow[]>();
+  const childrenByParent = new Map<string, TaskDisplayRow[]>();
   tasks.forEach((task) => {
     if (!task.parentTaskId || !tasksById.has(task.parentTaskId)) {
       return;
@@ -749,7 +994,7 @@ function buildTaskTreeRows(
   const rows: TaskTreeRow[] = [];
   const visited = new Set<string>();
 
-  function append(task: TaskRow, depth: number) {
+  function append(task: TaskDisplayRow, depth: number) {
     if (visited.has(task.id)) {
       return;
     }
@@ -762,7 +1007,6 @@ function buildTaskTreeRows(
   }
 
   roots.forEach((task) => append(task, 0));
-  sortTasks(tasks.filter((task) => !visited.has(task.id)), sourcesById).forEach((task) => append(task, 0));
   return { rows, expandableIds };
 }
 
@@ -772,11 +1016,11 @@ function childBackground(depth: number): string | undefined {
     : `color-mix(in srgb, var(--primary) ${Math.min(depth * 5, 25)}%, transparent)`;
 }
 
-function renderCell(column: TaskTableColumn, task: TaskRow, sourcesById: Map<string, TaskSource>) {
-  const value = column.value(task, sourcesById);
-  if (column.id === "status") {
-    return value === "completed" ? <Badge variant="secondary">Completed</Badge> : <Badge variant="outline">Open</Badge>;
+function renderCell(column: TaskTableColumn, task: TaskDisplayRow, sourcesById: Map<string, TaskSource>) {
+  if (column.render) {
+    return column.render(task, sourcesById);
   }
+  const value = column.value(task, sourcesById);
   if (column.id === "url" && typeof value === "string" && value.startsWith("http")) {
     return (
       <a className="text-primary underline-offset-4 hover:underline" href={value} target="_blank" rel="noreferrer">
@@ -788,18 +1032,56 @@ function renderCell(column: TaskTableColumn, task: TaskRow, sourcesById: Map<str
 }
 
 export function TasksPage() {
-  const { file } = useAppStore(useShallow((state) => ({ file: state.file })));
-  const tasks = file?.tasks ?? [];
+  const navigate = useNavigate();
+  const { file, createTask, deleteTask, updateActiveTasks, updateTaskField } = useAppStore(useShallow((state) => ({
+    file: state.file,
+    createTask: state.createTask,
+    deleteTask: state.deleteTask,
+    updateActiveTasks: state.updateActiveTasks,
+    updateTaskField: state.updateTaskField
+  })));
+  const tasks = useMemo(() => file ? taskDisplayRows(file) : [], [file]);
   const sourcesById = useMemo(
     () => new Map((file?.taskSources ?? []).map((source) => [source.id, source])),
     [file?.taskSources]
   );
-  const columns = useMemo(() => taskColumns(tasks), [tasks]);
+  const activeTaskKeys = useMemo(
+    () => new Set((file?.activeTasks ?? []).map(taskReferenceKey)),
+    [file?.activeTasks]
+  );
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   const [view, setView] = useState<TaskViewMode>("small-table");
   const [columnState, setColumnState] = useState<ColumnState[]>([]);
   const [filters, setFilters] = useState<FilterState[]>([]);
   const [sorts, setSorts] = useState<SortState[]>([]);
+  const [newTaskType, setNewTaskType] = useState<TaskSourceType>("Internal Task");
+  const [newTaskSourceId, setNewTaskSourceId] = useState("");
+  const [newTaskValues, setNewTaskValues] = useState<Record<string, MetadataValue>>({ status: true });
+  const [newTaskActive, setNewTaskActive] = useState(false);
+  const [creatingTask, setCreatingTask] = useState(false);
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+  const [updatingStatusTaskId, setUpdatingStatusTaskId] = useState<string | null>(null);
+  const [editField, setEditField] = useState<{
+    task: TaskDisplayRow;
+    field: TaskFieldMetadata;
+    value: MetadataValue;
+  } | null>(null);
+  function setTaskActive(task: TaskDisplayRow, active: boolean) {
+    if (!file) {
+      return;
+    }
+    const reference: ActiveTaskReference = { taskId: task.id, table: task.taskTable };
+    const key = taskReferenceKey(reference);
+    const next = active
+      ? [...file.activeTasks.filter((item) => taskReferenceKey(item) !== key), reference]
+      : file.activeTasks.filter((item) => taskReferenceKey(item) !== key);
+    void updateActiveTasks(next);
+  }
+
+  const columns = useMemo(
+    () => taskColumns(tasks, file?.internalTaskColumns ?? {}, activeTaskKeys, setTaskActive),
+    [activeTaskKeys, file?.internalTaskColumns, tasks]
+  );
   const { rows, expandableIds } = useMemo(
     () => buildTaskTreeRows(tasks, sourcesById, expandedIds),
     [expandedIds, sourcesById, tasks]
@@ -820,6 +1102,11 @@ export function TasksPage() {
   const activeFilters = hasActiveFilters(filters);
   const activeSorts = hasActiveSorts(sorts);
   const cellClassName = view === "large-table" ? "whitespace-nowrap px-4 py-3" : undefined;
+  const newTaskSourceOptions = useMemo(
+    () => (file?.taskSources ?? []).filter((source) => source.type === newTaskType),
+    [file?.taskSources, newTaskType]
+  );
+  const newTaskSource = newTaskSourceOptions.find((source) => source.id === newTaskSourceId) ?? newTaskSourceOptions[0];
 
   function updateColumnState(updater: (current: ColumnState[]) => ColumnState[]) {
     setColumnState(updater(syncedColumnState));
@@ -839,6 +1126,154 @@ export function TasksPage() {
 
   function toggleAll() {
     setExpandedIds(allExpanded ? new Set() : new Set(expandableIds));
+  }
+
+  function editableFieldForSource(source: TaskSource | undefined, column: TaskTableColumn): TaskFieldMetadata | null {
+    const path = editablePathForColumn(column);
+    if (!path || !source || ["type", "source", "url", "uuid", "parentTaskId", "rank", "data"].includes(column.id)) {
+      return null;
+    }
+    if (path === "status") {
+      return null;
+    }
+    const storedField = (file?.settings?.taskFieldMetadata[source.id] ?? []).find((field) => field.path === path && field.editable);
+    const normalizedStoredField = storedField && storedField.path === "body"
+      ? { ...storedField, type: "markdown" as const }
+      : storedField;
+    if (source.type === "Github") {
+      return normalizedStoredField ?? (
+        path === "body"
+          ? {
+              sourceId: source.id,
+              path: "body",
+              label: "Body",
+              type: "markdown",
+              editable: true,
+              updateKind: "github_issue"
+            }
+          : null
+      );
+    }
+    if (source.type === "Internal Task") {
+      const columnName = path === "title" ? "title" : path;
+      const field = file?.internalTaskColumns[columnName];
+      if (!field) {
+        return null;
+      }
+      return {
+        sourceId: source.id,
+        path: columnName,
+        label: columnName,
+        type: field.type === "float" || field.type === "int" ? "number" : field.type === "bool" ? "bool" : field.type === "datetime" ? "datetime" : getFieldTypeFromSelection(field),
+        editable: true,
+        options: field.options,
+        updateKind: "markdown_field"
+      };
+    }
+    if (normalizedStoredField) {
+      return normalizedStoredField;
+    }
+    return {
+      sourceId: source.id,
+      path,
+      label: path === "title" ? "Title" : path,
+      type: path === "body" ? "markdown" : "string",
+      editable: true,
+      updateKind: "markdown_field"
+    };
+  }
+
+  function editableFieldFor(task: TaskDisplayRow, column: TaskTableColumn): TaskFieldMetadata | null {
+    return editableFieldForSource(sourcesById.get(task.sourceId), column);
+  }
+
+  function setNewTaskValue(path: string, value: MetadataValue) {
+    setNewTaskValues((current) => ({ ...current, [path]: value }));
+  }
+
+  function changeNewTaskType(type: TaskSourceType) {
+    const nextSource = (file?.taskSources ?? []).find((source) => source.type === type);
+    setNewTaskType(type);
+    setNewTaskSourceId(nextSource?.id ?? "");
+    setNewTaskValues({ status: true });
+  }
+
+  async function handleCreateTask() {
+    setCreatingTask(true);
+    const ok = await createTask({
+      type: newTaskType,
+      sourceId: newTaskSource?.id,
+      values: newTaskValues,
+      active: newTaskActive
+    });
+    setCreatingTask(false);
+    if (ok) {
+      setNewTaskValues({ status: true });
+      setNewTaskActive(false);
+    }
+  }
+
+  async function handleDeleteTask(task: TaskDisplayRow) {
+    setDeletingTaskId(task.id);
+    await deleteTask(task.id);
+    setDeletingTaskId(null);
+  }
+
+  async function updateTaskStatus(task: TaskDisplayRow, open: boolean) {
+    const source = sourcesById.get(task.sourceId);
+    if (!source || task.status === open) {
+      return;
+    }
+    setUpdatingStatusTaskId(task.id);
+    await updateTaskField(task.id, statusFieldForSource(source), open);
+    setUpdatingStatusTaskId(null);
+  }
+
+  function renderCreateCell(column: TaskTableColumn): ReactNode {
+    if (column.id === "active") {
+      return <Switch checked={newTaskActive} onCheckedChange={setNewTaskActive} disabled={!newTaskSource} />;
+    }
+    if (column.id === "type") {
+      return (
+        <Select value={newTaskType} onValueChange={(value) => changeNewTaskType(value as TaskSourceType)}>
+          <SelectTrigger className="w-full min-w-32">
+            <SelectTriggerText value={newTaskType} placeholder="Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="Markdown">Markdown</SelectItem>
+            <SelectItem value="Internal Task">Internal Task</SelectItem>
+            <SelectItem value="Github">Github</SelectItem>
+          </SelectContent>
+        </Select>
+      );
+    }
+    if (column.id === "source") {
+      return (
+        <Select value={newTaskSource?.id} disabled={newTaskSourceOptions.length === 0} onValueChange={(value) => value !== null && setNewTaskSourceId(value)}>
+          <SelectTrigger className="w-full min-w-40">
+            <SelectTriggerText value={newTaskSource ? taskSourceLabel(newTaskSource) : undefined} placeholder="Source" />
+          </SelectTrigger>
+          <SelectContent>
+            {newTaskSourceOptions.map((source) => (
+              <SelectItem key={source.id} value={source.id}>
+                {taskSourceLabel(source)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      );
+    }
+    if (column.id === "url") {
+      return <span className="text-muted-foreground">Generated</span>;
+    }
+    const editable = column.id === "status" && newTaskSource ? statusFieldForSource(newTaskSource) : editableFieldForSource(newTaskSource, column);
+    return editable ? (
+      <TaskDraftInput
+        field={editable}
+        value={newTaskValues[editable.path] ?? (editable.path === "status" ? true : undefined)}
+        onChange={(value) => setNewTaskValue(editable.path, value)}
+      />
+    ) : <span className="text-muted-foreground">—</span>;
   }
 
   return (
@@ -915,6 +1350,9 @@ export function TasksPage() {
                 <SortPanel columns={columns} sorts={sorts} onChange={setSorts} />
               </PopoverContent>
             </Popover>
+            <Button type="button" onClick={() => navigate("/focus")}>
+              Continue
+            </Button>
           </div>
         </CardHeader>
         <CardContent>
@@ -936,6 +1374,7 @@ export function TasksPage() {
                 {visibleColumns.map((column) => (
                   <TableHead key={column.id} className={cellClassName}>{column.title}</TableHead>
                 ))}
+                <TableHead className="w-10" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -954,23 +1393,92 @@ export function TasksPage() {
                       </Button>
                     ) : null}
                   </TableCell>
-                  {visibleColumns.map((column) => (
-                    <TableCell key={column.id} className={cellClassName ?? (column.id === "contents" ? "max-w-md whitespace-normal" : "max-w-72 truncate")}>
-                      {renderCell(column, task, sourcesById)}
-                    </TableCell>
-                  ))}
+                  {visibleColumns.map((column) => {
+                    const editable = editableFieldFor(task, column);
+                    return (
+                      <TableCell key={column.id} className={cellClassName ?? (column.id === "contents" ? "max-w-md whitespace-normal" : "max-w-72 truncate")}>
+                        {column.id === "status" ? (
+                          <TaskStatusSelect
+                            task={task}
+                            disabled={updatingStatusTaskId === task.id}
+                            onChange={(open) => void updateTaskStatus(task, open)}
+                          />
+                        ) : (
+                          <span className="inline-flex max-w-full items-center gap-1">
+                            {editable ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-xs"
+                                onClick={() => setEditField({ task, field: editable, value: taskFieldValue(task, editable.path) })}
+                              >
+                                <Pencil className="size-3.5" />
+                              </Button>
+                            ) : null}
+                            <span className="min-w-0 truncate">{renderCell(column, task, sourcesById)}</span>
+                          </span>
+                        )}
+                      </TableCell>
+                    );
+                  })}
+                  <TableCell className={cellClassName}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      disabled={deletingTaskId === task.id}
+                      aria-label="Delete task"
+                      onClick={() => void handleDeleteTask(task)}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </TableCell>
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={visibleColumns.length + 1} className="py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={visibleColumns.length + 2} className="py-8 text-center text-muted-foreground">
                     {rows.length > 0 ? "No tasks match the active filters." : "No tasks synced yet."}
                   </TableCell>
                 </TableRow>
               )}
+              <TableRow>
+                <TableCell className={cellClassName} />
+                {visibleColumns.map((column) => (
+                  <TableCell key={`new-${column.id}`} className={cellClassName ?? (column.id === "contents" ? "max-w-md whitespace-normal" : "max-w-72")}>
+                    {renderCreateCell(column)}
+                  </TableCell>
+                ))}
+                <TableCell className={cellClassName}>
+                  <Button
+                    type="button"
+                    size="icon"
+                    disabled={!file || !newTaskSource || creatingTask}
+                    aria-label="Add task"
+                    onClick={() => void handleCreateTask()}
+                  >
+                    <Plus className="size-4" />
+                  </Button>
+                </TableCell>
+              </TableRow>
             </TableBody>
           </Table>
         </CardContent>
       </Card>
+      {editField ? (
+        <MetadataValueDialog
+          open
+          title={`Edit ${editField.field.label}`}
+          description="Update this task field."
+          field={fieldMetadataToDefinition(editField.field)}
+          initialValue={editField.value}
+          allowClear
+          onOpenChange={(open) => !open && setEditField(null)}
+          onSave={async (value) => {
+            await updateTaskField(editField.task.id, editField.field, value);
+            setEditField(null);
+          }}
+        />
+      ) : null}
     </main>
   );
 }

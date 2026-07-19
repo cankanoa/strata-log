@@ -14,8 +14,10 @@ contextBridge.exposeInMainWorld("strata", {
     createDatabaseFile: (payload) => ipcRenderer.invoke("database-file:create", payload),
     deleteDatabaseFile: (payload) => ipcRenderer.invoke("database-file:delete", payload),
     choosePath: () => ipcRenderer.invoke("path:choose"),
-    listMarkdownFiles: (pattern, baseDir) => ipcRenderer.invoke("path:list-markdown-files", pattern, baseDir),
+    listFiles: (pattern, baseDir) => ipcRenderer.invoke("path:list-files", pattern, baseDir),
+    getTextFileInfo: (path) => ipcRenderer.invoke("file:info", path),
     readTextFile: (path) => ipcRenderer.invoke("file:read", path),
+    readFileDataUrl: (path) => ipcRenderer.invoke("file:read-data-url", path),
     saveFile: (path, raw) => ipcRenderer.invoke("file:save", path, raw),
     watchFile: async (path, callback) => {
         const listener = (_event, payload) => {

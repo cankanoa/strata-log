@@ -58,6 +58,10 @@ id,name,type,selection,interval,required,visibility,options_json,default_json,sc
 00000000-0000-4000-8000-000000000003,start_time,datetime,single,false,false,viewable,[],null,regular,
 00000000-0000-4000-8000-000000000004,end_time,datetime,single,false,false,viewable,[],null,regular,
 00000000-0000-4000-8000-000000000005,session_id,uuid,single,false,false,viewable,[],null,regular,
+10000000-0000-4000-8000-000000000006,Area,string,select,false,false,editable,"[""Home"",""Health"",""Errands"",""Learning"",""Admin""]",null,regular,
+10000000-0000-4000-8000-000000000007,Priority,string,select,false,false,editable,"[""Low"",""Medium"",""High""]",null,regular,
+10000000-0000-4000-8000-000000000008,Energy,int,single,false,false,editable,[],null,regular,
+10000000-0000-4000-8000-000000000009,Notes,string,single,false,false,editable,[],null,regular,
 
 --- table:track_attribute_references:schema
 name: track_attribute_references
@@ -203,6 +207,7 @@ comments: {}
 
 --- table:task_sources:data
 id,name,type,url,account_id,column_names_json,last_updated_at
+10000000-0000-4000-8000-000000000101,Personal Todo,Internal Task,internal-task:10000000-0000-4000-8000-000000000101,,"[""title"",""status"",""area"",""priority"",""due_date"",""notes""]",
 
 --- table:tasks:schema
 name: tasks
@@ -272,6 +277,10 @@ comments: {}
 id,name,type,selection,required,options_json,default_json
 00000000-0000-4000-8000-000000000201,title,string,single,true,[],null
 00000000-0000-4000-8000-000000000202,status,bool,single,true,[],true
+10000000-0000-4000-8000-000000000203,area,string,select,false,"[""Home"",""Health"",""Errands"",""Learning"",""Admin""]",null
+10000000-0000-4000-8000-000000000204,priority,string,select,false,"[""Low"",""Medium"",""High""]",null
+10000000-0000-4000-8000-000000000205,due_date,datetime,single,false,[],null
+10000000-0000-4000-8000-000000000206,notes,string,single,false,[],null
 
 --- table:tasks_internal:schema
 name: tasks_internal
@@ -369,3 +378,4 @@ comments: {}
 
 --- table:accounts:data
 id,type,name,username,token
+

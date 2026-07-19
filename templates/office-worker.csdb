@@ -58,6 +58,11 @@ id,name,type,selection,interval,required,visibility,options_json,default_json,sc
 00000000-0000-4000-8000-000000000003,start_time,datetime,single,false,false,viewable,[],null,regular,
 00000000-0000-4000-8000-000000000004,end_time,datetime,single,false,false,viewable,[],null,regular,
 00000000-0000-4000-8000-000000000005,session_id,uuid,single,false,false,viewable,[],null,regular,
+20000000-0000-4000-8000-000000000006,Workstream,string,select,false,false,editable,"[""Operations"",""Planning"",""Communication"",""Support""]",null,regular,
+20000000-0000-4000-8000-000000000007,Work Type,string,select,false,false,editable,"[""Meeting"",""Email"",""Deep Work"",""Admin""]",null,regular,
+20000000-0000-4000-8000-000000000008,Meeting,bool,single,false,false,editable,[],null,regular,
+20000000-0000-4000-8000-000000000009,Stakeholders,string,multiselect,false,false,editable,"[""Leadership"",""Product"",""Sales"",""Support"",""External""]",null,regular,
+20000000-0000-4000-8000-00000000000a,Notes,string,single,false,false,editable,[],null,regular,
 
 --- table:track_attribute_references:schema
 name: track_attribute_references
@@ -203,6 +208,7 @@ comments: {}
 
 --- table:task_sources:data
 id,name,type,url,account_id,column_names_json,last_updated_at
+20000000-0000-4000-8000-000000000101,Office Tasks,Internal Task,internal-task:20000000-0000-4000-8000-000000000101,,"[""title"",""status"",""owner"",""due_date"",""workstream"",""reference""]",
 
 --- table:tasks:schema
 name: tasks
@@ -272,6 +278,10 @@ comments: {}
 id,name,type,selection,required,options_json,default_json
 00000000-0000-4000-8000-000000000201,title,string,single,true,[],null
 00000000-0000-4000-8000-000000000202,status,bool,single,true,[],true
+20000000-0000-4000-8000-000000000203,owner,string,single,false,[],null
+20000000-0000-4000-8000-000000000204,due_date,datetime,single,false,[],null
+20000000-0000-4000-8000-000000000205,workstream,string,select,false,"[""Operations"",""Planning"",""Communication"",""Support""]",null
+20000000-0000-4000-8000-000000000206,reference,string,single,false,[],null
 
 --- table:tasks_internal:schema
 name: tasks_internal
@@ -369,3 +379,4 @@ comments: {}
 
 --- table:accounts:data
 id,type,name,username,token
+

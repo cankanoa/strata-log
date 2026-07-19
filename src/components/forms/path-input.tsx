@@ -4,13 +4,15 @@ import { Input } from "@/components/ui/input";
 import { getPlatformApi } from "@/lib/platform";
 
 type PathInputProps = {
+  id?: string;
   value?: string;
   placeholder?: string;
+  required?: boolean;
   disabled?: boolean;
   onChange: (value: string) => void;
 };
 
-export function PathInput({ value, placeholder, disabled = false, onChange }: PathInputProps) {
+export function PathInput({ id, value, placeholder, required = false, disabled = false, onChange }: PathInputProps) {
   async function handleBrowse() {
     if (disabled) {
       return;
@@ -24,9 +26,11 @@ export function PathInput({ value, placeholder, disabled = false, onChange }: Pa
   return (
     <div className="flex gap-2">
       <Input
+        id={id}
         value={value ?? ""}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
+        required={required}
         disabled={disabled}
         className="min-w-0 flex-1"
       />

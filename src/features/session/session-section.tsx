@@ -126,7 +126,7 @@ export function SessionSection() {
   async function handleContinue() {
     const started = await handleStartNow();
     if (started) {
-      navigate("/focus");
+      navigate("/tasks");
     }
   }
 

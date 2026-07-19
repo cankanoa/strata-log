@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DateTimePicker } from "@/components/forms/date-time-picker";
@@ -9,6 +9,7 @@ import {
   getSelectableFieldOptions
 } from "@/lib/attribute-references";
 import { Button } from "@/components/ui/button";
+import { MarkdownValueDialog } from "@/components/forms/markdown-value-dialog";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   canEditField,
@@ -38,6 +39,7 @@ type MetadataFieldsFormProps = {
 const EDIT_OPTIONS_VALUE = "__edit_options__";
 
 export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], taskSources = [], value, onChange, onEditOptions }: MetadataFieldsFormProps) {
+  const [markdownFieldName, setMarkdownFieldName] = useState<string | null>(null);
   const file = useMemo<TimeLogFile>(
     () => ({
       version: 1,
@@ -46,12 +48,16 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], task
       sessionPresets: [],
       taskSources,
       tasks: [],
+      internalTaskColumns: {},
+      internalTasks: [],
+      activeTasks: [],
       accounts: [],
       entries: []
     }),
     [attributeReferenceGroups, fields, taskSources]
   );
   const visibleFields = useMemo(() => getActiveMetadataFields(file, value), [file, value]);
+  const markdownField = markdownFieldName ? visibleFields[markdownFieldName] : undefined;
 
   useEffect(() => {
     const nextValue = applyResolvedMetadataDefaults(file, value);
@@ -77,7 +83,7 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], task
         const addable = editable && isFieldAddable(field) && Boolean(onEditOptions);
 
         return (
-        <div className="grid gap-2" key={key}>
+        <div className="grid min-w-0 gap-2" key={key}>
           {field.type !== "datetime" ? (
             <Label htmlFor={`metadata-${key}`}>
               {key}
@@ -123,7 +129,7 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], task
               </SelectContent>
             </Select>
           ) : effectiveSelection === "multiselect" ? (
-            <div className="flex flex-wrap gap-2 rounded-md border border-border p-2">
+            <div className="flex min-h-8 flex-wrap gap-2 rounded-md border border-border p-px">
               {selectableOptions.map((option) => {
                 const current = getMetadataChoiceTokens(field, value[key]);
                 const selected = current.includes(option.value);
@@ -131,8 +137,8 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], task
                   <button
                     className={
                       selected
-                        ? "rounded-md bg-primary px-3 py-1 text-sm text-primary-foreground"
-                        : "rounded-md border border-border px-3 py-1 text-sm"
+                        ? "inline-flex h-7 items-center rounded-md border border-primary bg-primary px-3 text-sm text-primary-foreground"
+                        : "inline-flex h-7 items-center rounded-md border border-border px-3 text-sm"
                     }
                     key={option.raw}
                     type="button"
@@ -201,9 +207,24 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], task
                 allowClear
               />
             </div>
+          ) : field.type === "markdown" ? (
+            <Button
+              id={`metadata-${key}`}
+              type="button"
+              variant="outline"
+              className="w-full min-w-0 max-w-full justify-start overflow-hidden"
+              disabled={!editable}
+              onClick={() => setMarkdownFieldName(key)}
+            >
+              <span className={value[key] ? "block min-w-0 flex-1 truncate text-left" : "block min-w-0 flex-1 truncate text-left text-muted-foreground"}>
+                {typeof value[key] === "string" && value[key].trim().length > 0 ? value[key] : key}
+              </span>
+            </Button>
           ) : field.type === "path" ? (
             <PathInput
+              id={`metadata-${key}`}
               value={typeof value[key] === "string" ? value[key] : ""}
+              required={field.required}
               disabled={!editable}
               onChange={(nextValue) =>
                 onChange({
@@ -212,19 +233,19 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], task
                 })
               }
             />
-          ) : field.type === "markdown_glob" ? (
-            <Input
+          ) : field.type === "file_search" ? (
+            <PathInput
               id={`metadata-${key}`}
               value={typeof value[key] === "string" ? value[key] : ""}
               required={field.required}
               disabled={!editable}
-              onChange={(event) =>
+              onChange={(nextValue) =>
                 onChange({
                   ...value,
-                  [key]: event.target.value || undefined
+                  [key]: nextValue || undefined
                 })
               }
-              placeholder="**/*.md"
+              placeholder="**/*"
             />
           ) : field.type === "int" || field.type === "float" ? (
             <Input
@@ -264,6 +285,22 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], task
           )}
         </div>
       )})}
+      {markdownFieldName && markdownField ? (
+        <MarkdownValueDialog
+          open
+          title={markdownFieldName}
+          description="Edit this markdown value."
+          initialValue={value[markdownFieldName]}
+          onOpenChange={(open) => !open && setMarkdownFieldName(null)}
+          onSave={(nextValue) => {
+            onChange({
+              ...value,
+              [markdownFieldName]: nextValue
+            });
+            setMarkdownFieldName(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

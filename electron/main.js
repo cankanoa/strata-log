@@ -321,6 +321,9 @@ ipcMain.handle("path:choose", async () => {
     }
     return result.filePaths[0];
 });
+function hasGlobCharacters(pattern) {
+    return /[*?{}\[\]()+!@]/.test(pattern);
+}
 function buildDirectoryTree(targetPath) {
     if (!fs.existsSync(targetPath)) {
         return [];
@@ -358,11 +361,29 @@ function buildDirectoryTree(targetPath) {
         };
     });
 }
-ipcMain.handle("path:list-markdown-files", async (_event, pattern, baseDir) => {
-    if (!pattern || !/\.md(?:$|[\\/[*?{])/i.test(pattern)) {
+ipcMain.handle("path:list-files", async (_event, pattern, baseDir) => {
+    const trimmed = pattern.trim();
+    if (!trimmed) {
         return [];
     }
-    return fg(pattern, {
+    if (!hasGlobCharacters(trimmed)) {
+        const resolvedPath = path.isAbsolute(trimmed) ? trimmed : path.resolve(baseDir ?? process.cwd(), trimmed);
+        if (fs.existsSync(resolvedPath)) {
+            const stats = fs.statSync(resolvedPath);
+            if (stats.isFile()) {
+                return [resolvedPath];
+            }
+            if (stats.isDirectory()) {
+                return fg("**/*", {
+                    absolute: true,
+                    onlyFiles: true,
+                    cwd: resolvedPath,
+                    unique: true
+                });
+            }
+        }
+    }
+    return fg(trimmed, {
         absolute: true,
         onlyFiles: true,
         cwd: baseDir,
@@ -374,6 +395,39 @@ ipcMain.handle("file:read", async (_event, filePath) => {
         return "";
     }
     return fs.readFileSync(filePath, "utf8");
+});
+ipcMain.handle("file:read-data-url", async (_event, filePath) => {
+    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+        return "";
+    }
+    const extension = path.extname(filePath).toLowerCase();
+    const mimeTypes = {
+        ".apng": "image/apng",
+        ".avif": "image/avif",
+        ".gif": "image/gif",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".svg": "image/svg+xml",
+        ".webp": "image/webp",
+        ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
+        ".ogg": "audio/ogg",
+        ".wav": "audio/wav",
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".webm": "video/webm"
+    };
+    return `data:${mimeTypes[extension] ?? "application/octet-stream"};base64,${fs.readFileSync(filePath).toString("base64")}`;
+});
+ipcMain.handle("file:info", async (_event, filePath) => {
+    const exists = fs.existsSync(filePath) && !fs.statSync(filePath).isDirectory();
+    return {
+        path: filePath,
+        exists,
+        updatedAt: exists ? fs.statSync(filePath).mtime.toISOString() : null
+    };
 });
 ipcMain.handle("file:save", async (_, filePath, raw) => {
     const tempPath = `${filePath}.tmp`;

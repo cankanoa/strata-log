@@ -366,6 +366,10 @@ ipcMain.handle("path:choose", async () => {
   return result.filePaths[0];
 });
 
+function hasGlobCharacters(pattern: string): boolean {
+  return /[*?{}\[\]()+!@]/.test(pattern);
+}
+
 function buildDirectoryTree(targetPath: string): DirectoryTreeNode[] {
   if (!fs.existsSync(targetPath)) {
     return [];
@@ -406,12 +410,30 @@ function buildDirectoryTree(targetPath: string): DirectoryTreeNode[] {
     });
 }
 
-ipcMain.handle("path:list-markdown-files", async (_event, pattern: string, baseDir?: string): Promise<string[]> => {
-  if (!pattern || !/\.md(?:$|[\\/[*?{])/i.test(pattern)) {
+ipcMain.handle("path:list-files", async (_event, pattern: string, baseDir?: string): Promise<string[]> => {
+  const trimmed = pattern.trim();
+  if (!trimmed) {
     return [];
   }
+  if (!hasGlobCharacters(trimmed)) {
+    const resolvedPath = path.isAbsolute(trimmed) ? trimmed : path.resolve(baseDir ?? process.cwd(), trimmed);
+    if (fs.existsSync(resolvedPath)) {
+      const stats = fs.statSync(resolvedPath);
+      if (stats.isFile()) {
+        return [resolvedPath];
+      }
+      if (stats.isDirectory()) {
+        return fg("**/*", {
+          absolute: true,
+          onlyFiles: true,
+          cwd: resolvedPath,
+          unique: true
+        });
+      }
+    }
+  }
 
-  return fg(pattern, {
+  return fg(trimmed, {
     absolute: true,
     onlyFiles: true,
     cwd: baseDir,
@@ -424,6 +446,41 @@ ipcMain.handle("file:read", async (_event, filePath: string): Promise<string> =>
     return "";
   }
   return fs.readFileSync(filePath, "utf8");
+});
+
+ipcMain.handle("file:read-data-url", async (_event, filePath: string): Promise<string> => {
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    return "";
+  }
+  const extension = path.extname(filePath).toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    ".apng": "image/apng",
+    ".avif": "image/avif",
+    ".gif": "image/gif",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".wav": "audio/wav",
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm"
+  };
+  return `data:${mimeTypes[extension] ?? "application/octet-stream"};base64,${fs.readFileSync(filePath).toString("base64")}`;
+});
+
+ipcMain.handle("file:info", async (_event, filePath: string) => {
+  const exists = fs.existsSync(filePath) && !fs.statSync(filePath).isDirectory();
+  return {
+    path: filePath,
+    exists,
+    updatedAt: exists ? fs.statSync(filePath).mtime.toISOString() : null
+  };
 });
 
 ipcMain.handle("file:save", async (_, filePath: string, raw: string) => {

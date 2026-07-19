@@ -12,6 +12,7 @@ import {
   serializeFieldOption,
   type ParsedFieldOption
 } from "@/lib/metadata";
+import { taskSourceLabel } from "@/lib/task-query";
 import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, MetadataValue, SessionMetadata, TimeLogFile } from "@/lib/types";
 
 export function getTaskSourceFieldOptions(file: TimeLogFile | null | undefined): ParsedFieldOption[] {
@@ -23,7 +24,7 @@ export function getTaskSourceFieldOptions(file: TimeLogFile | null | undefined):
     }
     seen.add(value);
     return [{
-      display: source.name?.trim() || undefined,
+      display: taskSourceLabel(source),
       value,
       raw: `task-source:${source.id}`
     }];

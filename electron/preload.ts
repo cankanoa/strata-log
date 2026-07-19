@@ -21,8 +21,10 @@ contextBridge.exposeInMainWorld("strata", {
   deleteDatabaseFile: (payload: { location: "Internal" | "Path"; url: string }) =>
     ipcRenderer.invoke("database-file:delete", payload),
   choosePath: () => ipcRenderer.invoke("path:choose"),
-  listMarkdownFiles: (pattern: string, baseDir?: string) => ipcRenderer.invoke("path:list-markdown-files", pattern, baseDir),
+  listFiles: (pattern: string, baseDir?: string) => ipcRenderer.invoke("path:list-files", pattern, baseDir),
+  getTextFileInfo: (path: string) => ipcRenderer.invoke("file:info", path),
   readTextFile: (path: string) => ipcRenderer.invoke("file:read", path),
+  readFileDataUrl: (path: string) => ipcRenderer.invoke("file:read-data-url", path),
   saveFile: (path: string, raw: string) => ipcRenderer.invoke("file:save", path, raw),
   watchFile: async (path: string, callback: (raw: string) => void) => {
     const listener = (_event: unknown, payload: { path: string; raw: string }) => {

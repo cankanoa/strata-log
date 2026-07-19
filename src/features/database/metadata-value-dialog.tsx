@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MarkdownValueDialog } from "@/components/forms/markdown-value-dialog";
 import { PathInput } from "@/components/forms/path-input";
 import { getSelectableFieldOptions } from "@/lib/attribute-references";
 import {
@@ -69,6 +70,9 @@ export function MetadataValueDialog({
     sessionPresets: [],
     taskSources,
     tasks: [],
+    internalTaskColumns: {},
+    internalTasks: [],
+    activeTasks: [],
     accounts: [],
     entries: []
   };
@@ -78,12 +82,28 @@ export function MetadataValueDialog({
       : getFieldSelection(field);
   const selectableOptions = getSelectableFieldOptions(field, optionFile);
   const selectedOption = selectableOptions.find((option) => option.value === getMetadataChoiceToken(field, value));
+  const trueLabel = field.options?.[0] ?? "True";
+  const falseLabel = field.options?.[1] ?? "False";
 
   useEffect(() => {
     if (open) {
       setValue(initialValue);
     }
   }, [initialValue, open]);
+
+  if (field.type === "markdown") {
+    return (
+      <MarkdownValueDialog
+        open={open}
+        title={title}
+        description={description}
+        initialValue={initialValue}
+        saveLabel={saveLabel}
+        onOpenChange={onOpenChange}
+        onSave={(nextValue) => onSave(normalizeSavedValue(field, nextValue))}
+      />
+    );
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -119,7 +139,7 @@ export function MetadataValueDialog({
           ) : effectiveSelection === "multiselect" ? (
             <div className="grid gap-2">
               <Label>Value</Label>
-              <div className="flex flex-wrap gap-2 rounded-md border border-border p-2">
+              <div className="flex min-h-8 flex-wrap gap-2 rounded-md border border-border p-px">
                 {selectableOptions.map((option) => {
                   const current = getMetadataChoiceTokens(field, value);
                   const selected = current.includes(option.value);
@@ -127,7 +147,7 @@ export function MetadataValueDialog({
                     <button
                       key={option.raw}
                       type="button"
-                      className={selected ? "rounded-md bg-primary px-3 py-1 text-sm text-primary-foreground" : "rounded-md border border-border px-3 py-1 text-sm"}
+                      className={selected ? "inline-flex h-7 items-center rounded-md border border-primary bg-primary px-3 text-sm text-primary-foreground" : "inline-flex h-7 items-center rounded-md border border-border px-3 text-sm"}
                       onClick={() =>
                         setValue(
                           (selected ? current.filter((item) => item !== option.value) : [...current, option.value])
@@ -151,13 +171,13 @@ export function MetadataValueDialog({
               >
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Select a value">
-                    {typeof value === "boolean" ? (value ? "True" : "False") : undefined}
+                    {typeof value === "boolean" ? (value ? trueLabel : falseLabel) : undefined}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {allowClear ? <SelectItem value="__unset__">Unset</SelectItem> : null}
-                  <SelectItem value="true">True</SelectItem>
-                  <SelectItem value="false">False</SelectItem>
+                  <SelectItem value="true">{trueLabel}</SelectItem>
+                  <SelectItem value="false">{falseLabel}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -172,13 +192,13 @@ export function MetadataValueDialog({
               <Label>Value</Label>
               <PathInput value={typeof value === "string" ? value : ""} onChange={(nextValue) => setValue(nextValue)} />
             </div>
-          ) : field.type === "markdown_glob" ? (
+          ) : field.type === "file_search" ? (
             <div className="grid gap-2">
               <Label>Value</Label>
-              <Input
+              <PathInput
                 value={typeof value === "string" ? value : ""}
-                onChange={(event) => setValue(event.target.value)}
-                placeholder="**/*.md"
+                onChange={(nextValue) => setValue(nextValue)}
+                placeholder="**/*"
               />
             </div>
           ) : field.type === "int" || field.type === "float" ? (

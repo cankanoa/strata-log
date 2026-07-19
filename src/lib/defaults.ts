@@ -1,5 +1,10 @@
 import { BUILTIN_FIELD_DEFINITIONS } from "@/lib/metadata";
-import type { TimeLogFile } from "@/lib/types";
+import type { GeneralSettings, TimeLogFile } from "@/lib/types";
+
+export const defaultGeneralSettings: GeneralSettings = {
+  refreshRateSeconds: 0,
+  taskFieldMetadata: {}
+};
 
 export const defaultTimeLogFile: TimeLogFile = {
   version: 1,
@@ -8,6 +13,10 @@ export const defaultTimeLogFile: TimeLogFile = {
   sessionPresets: [],
   taskSources: [],
   tasks: [],
+  internalTaskColumns: {},
+  internalTasks: [],
+  activeTasks: [],
   accounts: [],
-  entries: []
+  entries: [],
+  settings: defaultGeneralSettings
 };

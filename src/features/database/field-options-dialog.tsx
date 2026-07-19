@@ -146,12 +146,12 @@ function PathOptionEditor({ option, onChange }: OptionEditorProps) {
   );
 }
 
-function MarkdownGlobOptionEditor({ option, onChange }: OptionEditorProps) {
+function FileSearchOptionEditor({ option, onChange }: OptionEditorProps) {
   return (
-    <Input
+    <PathInput
       value={typeof option.value === "string" ? option.value : ""}
-      onChange={(event) => onChange({ value: event.target.value })}
-      placeholder="**/*.md"
+      onChange={(value) => onChange({ value })}
+      placeholder="**/*"
     />
   );
 }
@@ -187,8 +187,8 @@ function TypeOptionEditor({
       return <FloatOptionEditor option={option} onChange={onChange} />;
     case "path":
       return <PathOptionEditor option={option} onChange={onChange} />;
-    case "markdown_glob":
-      return <MarkdownGlobOptionEditor option={option} onChange={onChange} />;
+    case "file_search":
+      return <FileSearchOptionEditor option={option} onChange={onChange} />;
     case "datetime":
       return <DateTimeOptionEditor option={option} onChange={onChange} />;
     case "attribute_reference":

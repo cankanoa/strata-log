@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { Pause, Play, Square } from "lucide-react";
+import { ChevronRight, Pause, Play, Square } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { formatDuration, formatDurationWithSeconds, getRunningEntry, netDurationMs } from "@/lib/time";
-import { MarkdownSidebarBrowser } from "@/components/task/task-sidebar-browser";
+import { activeTaskDisplayRows } from "@/lib/task-query";
+import { FileSidebarBrowser } from "@/components/task/task-sidebar-browser";
 import { DatabaseReferenceSyncDialog } from "@/features/database/database-reference-sync-dialog";
 import { getMissingDatabaseReferences, removeDatabaseReferences, type DatabaseReferenceStatus } from "@/lib/database-registry-sync";
 import { getActiveDatabaseEntry, parseDatabaseRegistry } from "@/lib/database-registry";
@@ -13,7 +14,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { FocusPage } from "@/pages/focus-page";
 import { TrackPage } from "@/pages/track-page";
 import { SettingsPage } from "@/pages/settings-page";
-import { MarkdownPage } from "@/pages/markdown-page";
+import { FilesPage } from "@/pages/files-page";
 import { TasksPage } from "@/pages/task-page";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
@@ -41,6 +42,37 @@ function playFocusCompleteAlert(mode: "sound" | "vibrate" | "both") {
     oscillator.start();
     oscillator.stop(context.currentTime + 0.25);
   }
+}
+
+function SidebarStatusText({
+  title,
+  subtext,
+  active,
+  mono = false
+}: {
+  title: string;
+  subtext?: string;
+  active: boolean;
+  mono?: boolean;
+}) {
+  return (
+    <>
+      <div
+        className={
+          subtext
+            ? `text-xs font-medium ${active ? "text-primary-foreground/80" : "text-muted-foreground"}`
+            : "text-sm font-medium"
+        }
+      >
+        {title}
+      </div>
+      {subtext ? (
+        <div className={`${mono ? "font-mono text-lg" : "truncate text-sm"} font-semibold`}>
+          {subtext}
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 export default function App() {
@@ -83,11 +115,31 @@ export default function App() {
   );
   const runningEntry = getRunningEntry(file?.entries ?? []);
   const [trayTick, setTrayTick] = useState(0);
+  const [activeTaskIndex, setActiveTaskIndex] = useState(0);
   const [missingDatabaseReferences, setMissingDatabaseReferences] = useState<DatabaseReferenceStatus[]>([]);
   const startupDatabaseSyncRan = useRef(false);
+  const githubMetadataRefreshKey = useRef("");
   const focusRemainingSeconds = focusEndsAt
     ? Math.max(0, Math.ceil((focusEndsAt - Date.now()) / 1000))
     : focusDurationSeconds;
+  const activeTasks = useMemo(() => file ? activeTaskDisplayRows(file) : [], [file]);
+  const refreshableSourceIds = useMemo(
+    () => (file?.taskSources ?? []).filter((source) => source.type !== "Internal Task").map((source) => source.id),
+    [file?.taskSources]
+  );
+  const refreshRateSeconds = file?.settings?.refreshRateSeconds ?? 0;
+  const githubSourceKey = useMemo(
+    () => (file?.taskSources ?? [])
+      .filter((source) => source.type === "Github")
+      .map((source) => `${source.id}:${source.url}:${source.accountId ?? ""}`)
+      .join("|"),
+    [file?.taskSources]
+  );
+  const activeTaskKey = activeTasks.map((task) => `${task.taskTable}:${task.id}`).join("|");
+  const activeTask = activeTasks.length > 0 ? activeTasks[activeTaskIndex % activeTasks.length] : undefined;
+  const trackSubtext = runningEntry ? formatDurationWithSeconds(netDurationMs(runningEntry)) : undefined;
+  const focusSubtext = focusEndsAt ? formatFocusDuration(focusRemainingSeconds) : undefined;
+  const taskSubtext = activeTask?.contents;
 
   function scrollToSection(sectionId: string) {
     document.getElementById(sectionId)?.scrollIntoView({
@@ -100,6 +152,35 @@ export default function App() {
     const interval = window.setInterval(() => setTrayTick((value) => value + 1), 1000);
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    setActiveTaskIndex(0);
+  }, [activeTaskKey]);
+
+  useEffect(() => {
+    if (refreshRateSeconds <= 0 || refreshableSourceIds.length === 0) {
+      return;
+    }
+    const refresh = () => {
+      refreshableSourceIds.forEach((sourceId) => {
+        void useAppStore.getState().syncTaskSource(sourceId);
+      });
+    };
+    const interval = window.setInterval(refresh, refreshRateSeconds * 1000);
+    return () => window.clearInterval(interval);
+  }, [refreshRateSeconds, refreshableSourceIds]);
+
+  useEffect(() => {
+    if (!file || !githubSourceKey || githubMetadataRefreshKey.current === githubSourceKey) {
+      return;
+    }
+    githubMetadataRefreshKey.current = githubSourceKey;
+    file.taskSources
+      .filter((source) => source.type === "Github")
+      .forEach((source) => {
+        void useAppStore.getState().syncTaskSource(source.id);
+      });
+  }, [file, githubSourceKey]);
 
   useEffect(() => {
     if (startupDatabaseSyncRan.current) {
@@ -167,7 +248,7 @@ export default function App() {
         window.setTimeout(() => scrollToSection("settings-section"), 50);
       }
       if (action === "open-task") {
-        navigate("/markdown");
+        navigate("/files");
       }
     });
   }, [navigate]);
@@ -219,9 +300,9 @@ export default function App() {
         onKeep={() => setMissingDatabaseReferences([])}
         onRemove={removeMissingDatabaseReferences}
       />
-      <div className="md:grid md:min-h-screen md:grid-cols-[220px_minmax(0,1fr)]">
-        <aside className="sticky top-0 z-10 border-b border-border/70 bg-[var(--app-shell-background)] md:h-screen md:border-b-0 md:border-r">
-          <div className="flex min-h-0 flex-col gap-3 p-4 md:h-full md:justify-start">
+      <div className="md:grid md:h-screen md:overflow-hidden md:grid-cols-[220px_minmax(0,1fr)]">
+        <aside className="sticky top-0 z-10 border-b border-border/70 bg-[var(--app-shell-background)] md:h-screen md:overflow-hidden md:border-b-0 md:border-r">
+          <div className="flex min-h-0 flex-col gap-3 p-4 md:h-full md:overflow-y-auto md:overscroll-contain">
             <nav className="flex w-full flex-col gap-3 md:items-stretch">
               <Link
                 to="/settings"
@@ -229,38 +310,23 @@ export default function App() {
               >
                 Settings
               </Link>
-              <Link
-                to="/tasks"
-                className={`rounded-xl px-4 py-3 text-sm font-medium transition-colors ${location.pathname === "/tasks" ? "bg-primary text-primary-foreground" : "bg-background/90 hover:bg-background"}`}
-              >
-                Tasks
-              </Link>
             </nav>
             <div className="flex flex-col gap-2">
               <div
-                className={`rounded-xl border px-3 py-2 ${
+                className={`h-16 rounded-xl border px-3 py-2 ${
                   location.pathname === "/track"
                     ? "border-primary bg-primary text-primary-foreground"
                     : "border-border/70 bg-background/70"
                 }`}
               >
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex h-full items-center justify-between gap-2">
                   <Link
                     to="/track"
-                    className={`min-w-0 flex-1 rounded-md outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${
+                    className={`flex h-full min-w-0 flex-1 flex-col justify-center rounded-md outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${
                       location.pathname === "/track" ? "text-primary-foreground" : "hover:opacity-80"
                     }`}
                   >
-                    <div
-                      className={`text-xs font-medium ${
-                        location.pathname === "/track" ? "text-primary-foreground/80" : "text-muted-foreground"
-                      }`}
-                    >
-                      Track
-                    </div>
-                    <div className="font-mono text-lg font-semibold">
-                      {runningEntry ? formatDurationWithSeconds(netDurationMs(runningEntry)) : "00:00:00"}
-                    </div>
+                    <SidebarStatusText title="Track" subtext={trackSubtext} active={location.pathname === "/track"} mono />
                   </Link>
                   <Button
                     size="icon"
@@ -276,11 +342,7 @@ export default function App() {
                         void stopLiveEntry();
                         return;
                       }
-                      void startLiveEntry(trackDraftMetadata).then((started) => {
-                        if (started) {
-                          navigate("/focus");
-                        }
-                      });
+                      void startLiveEntry(trackDraftMetadata);
                     }}
                   >
                     {runningEntry ? <Square className="size-4" /> : <Play className="size-4" />}
@@ -288,27 +350,52 @@ export default function App() {
                 </div>
               </div>
               <div
-                className={`rounded-xl border px-3 py-2 ${
+                className={`h-16 rounded-xl border px-3 py-2 ${
+                  location.pathname === "/tasks"
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border/70 bg-background/70"
+                }`}
+              >
+                <div className="flex h-full items-center justify-between gap-2">
+                  <Link
+                    to="/tasks"
+                    className={`flex h-full min-w-0 flex-1 flex-col justify-center rounded-md outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${
+                      location.pathname === "/tasks" ? "text-primary-foreground" : "hover:opacity-80"
+                    }`}
+                  >
+                    <SidebarStatusText title="Tasks" subtext={taskSubtext} active={location.pathname === "/tasks"} />
+                  </Link>
+                  {taskSubtext && activeTasks.length > 1 ? (
+                    <Button
+                      size="icon"
+                      variant={location.pathname === "/tasks" ? "secondary" : "ghost"}
+                      className={
+                        location.pathname === "/tasks"
+                          ? "bg-primary-foreground text-primary hover:bg-primary-foreground/90"
+                          : undefined
+                      }
+                      onClick={() => setActiveTaskIndex((index) => (index + 1) % activeTasks.length)}
+                    >
+                      <ChevronRight className="size-4" />
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              <div
+                className={`h-16 rounded-xl border px-3 py-2 ${
                   location.pathname === "/focus"
                     ? "border-primary bg-primary text-primary-foreground"
                     : "border-border/70 bg-background/70"
                 }`}
               >
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex h-full items-center justify-between gap-2">
                   <Link
                     to="/focus"
-                    className={`min-w-0 flex-1 rounded-md outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${
+                    className={`flex h-full min-w-0 flex-1 flex-col justify-center rounded-md outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${
                       location.pathname === "/focus" ? "text-primary-foreground" : "hover:opacity-80"
                     }`}
                   >
-                    <div
-                      className={`text-xs font-medium ${
-                        location.pathname === "/focus" ? "text-primary-foreground/80" : "text-muted-foreground"
-                      }`}
-                    >
-                      Focus
-                    </div>
-                    <div className="font-mono text-lg font-semibold">{formatFocusDuration(focusRemainingSeconds)}</div>
+                    <SidebarStatusText title="Focus" subtext={focusSubtext} active={location.pathname === "/focus"} mono />
                   </Link>
                   <Button
                     size="icon"
@@ -324,7 +411,6 @@ export default function App() {
                         return;
                       }
                       startFocusTimer();
-                      navigate("/markdown");
                     }}
                   >
                     {focusEndsAt ? <Pause className="size-4" /> : <Play className="size-4" />}
@@ -332,15 +418,15 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <MarkdownSidebarBrowser />
+            <FileSidebarBrowser />
           </div>
         </aside>
-        <div className="min-w-0">
+        <div className="min-w-0 md:h-screen md:overflow-y-auto md:overscroll-contain">
           <Routes>
             <Route path="/" element={<Navigate to="/track" replace />} />
             <Route path="/track" element={<TrackPage />} />
             <Route path="/focus" element={<FocusPage />} />
-            <Route path="/markdown" element={<MarkdownPage />} />
+            <Route path="/files" element={<FilesPage />} />
             <Route path="/task" element={<Navigate to="/tasks" replace />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/settings" element={<SettingsPage />} />

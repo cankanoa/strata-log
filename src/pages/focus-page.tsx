@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -20,7 +19,6 @@ function formatRemaining(totalSeconds: number) {
 }
 
 export function FocusPage() {
-  const navigate = useNavigate();
   const {
     focusMode,
     focusSoundMode,
@@ -99,24 +97,14 @@ export function FocusPage() {
                 Pause
               </Button>
             ) : (
-              <>
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    startFocusTimer();
-                  }}
-                >
-                  Start
-                </Button>
-                <Button
-                  onClick={() => {
-                    startFocusTimer();
-                    navigate("/markdown");
-                  }}
-                >
-                  Continue
-                </Button>
-              </>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  startFocusTimer();
+                }}
+              >
+                Start
+              </Button>
             )}
           </div>
         </CardHeader>

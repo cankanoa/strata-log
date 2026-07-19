@@ -58,6 +58,12 @@ id,name,type,selection,interval,required,visibility,options_json,default_json,sc
 00000000-0000-4000-8000-000000000003,start_time,datetime,single,false,false,viewable,[],null,regular,
 00000000-0000-4000-8000-000000000004,end_time,datetime,single,false,false,viewable,[],null,regular,
 00000000-0000-4000-8000-000000000005,session_id,uuid,single,false,false,viewable,[],null,regular,
+40000000-0000-4000-8000-000000000006,Repo,file_search,single,false,false,editable,[],null,regular,
+40000000-0000-4000-8000-000000000007,Work Type,string,select,false,false,editable,"[""Feature"",""Bug"",""Review"",""Refactor"",""Ops""]",null,regular,
+40000000-0000-4000-8000-000000000008,Branch,string,single,false,false,editable,[],null,regular,
+40000000-0000-4000-8000-000000000009,PR/Issue URL,string,single,false,false,editable,[],null,regular,
+40000000-0000-4000-8000-00000000000a,Task Source,filter_task_sources,multiselect,false,false,editable,[],null,regular,
+40000000-0000-4000-8000-00000000000b,Notes,string,single,false,false,editable,[],null,regular,
 
 --- table:track_attribute_references:schema
 name: track_attribute_references
@@ -203,6 +209,7 @@ comments: {}
 
 --- table:task_sources:data
 id,name,type,url,account_id,column_names_json,last_updated_at
+40000000-0000-4000-8000-000000000101,Dev Backlog,Internal Task,internal-task:40000000-0000-4000-8000-000000000101,,"[""title"",""status"",""repository"",""priority"",""estimate_hours"",""labels"",""link""]",
 
 --- table:tasks:schema
 name: tasks
@@ -272,6 +279,11 @@ comments: {}
 id,name,type,selection,required,options_json,default_json
 00000000-0000-4000-8000-000000000201,title,string,single,true,[],null
 00000000-0000-4000-8000-000000000202,status,bool,single,true,[],true
+40000000-0000-4000-8000-000000000203,repository,string,single,false,[],null
+40000000-0000-4000-8000-000000000204,priority,string,select,false,"[""Low"",""Medium"",""High"",""Urgent""]",null
+40000000-0000-4000-8000-000000000205,estimate_hours,float,single,false,[],null
+40000000-0000-4000-8000-000000000206,labels,string,select,false,"[""Feature"",""Bug"",""Review"",""Refactor"",""Ops""]",null
+40000000-0000-4000-8000-000000000207,link,string,single,false,[],null
 
 --- table:tasks_internal:schema
 name: tasks_internal

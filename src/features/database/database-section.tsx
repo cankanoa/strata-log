@@ -50,7 +50,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { TemplateService } from "@/services/template-service";
+import { TEMPLATE_OPTIONS, TemplateService } from "@/services/template-service";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
 
@@ -98,6 +98,8 @@ type DatabaseFileInfo = {
   exists: boolean;
   updatedAt: string | null;
 };
+
+type DatabaseSectionGroup = "sources" | "track";
 
 type FieldRowHandlers = {
   onRename: (name: string) => void;
@@ -413,7 +415,9 @@ function FieldRows({
   ));
 }
 
-export function DatabaseSection() {
+export function DatabaseSection({ sections = ["sources", "track"] }: { sections?: DatabaseSectionGroup[] }) {
+  const showSources = sections.includes("sources");
+  const showTrack = sections.includes("track");
   const {
     file,
     fileHandle,
@@ -469,7 +473,6 @@ export function DatabaseSection() {
   const [databaseDraftLocation, setDatabaseDraftLocation] = useState<DatabaseLocation>("Internal");
   const [databaseDraftUrl, setDatabaseDraftUrl] = useState("");
   const [databaseTemplateId, setDatabaseTemplateId] = useState("blank");
-  const templates = useMemo(() => TemplateService.listTemplates(), []);
   const regularFields = useMemo(() => getMetadataFields(file?.fields ?? {}), [file]);
   const groupFieldTypes = useMemo(() => fieldTypeOptions.filter((option) => option !== "attribute_reference"), []);
 
@@ -533,8 +536,10 @@ export function DatabaseSection() {
   }
 
   useEffect(() => {
-    void loadDatabaseEntries();
-  }, []);
+    if (showSources) {
+      void loadDatabaseEntries();
+    }
+  }, [showSources]);
 
   async function syncManagedDatabaseReferences() {
     const statuses = await getDatabaseReferenceStatuses();
@@ -560,8 +565,11 @@ export function DatabaseSection() {
   }
 
   function databaseTemplateRaw(): string {
-    const template = TemplateService.getTemplate(databaseTemplateId) ?? TemplateService.getTemplate("blank") ?? templates[0];
-    return serializeTimeLogYaml(template!.content);
+    const template = TemplateService.getTemplate(databaseTemplateId) ?? TemplateService.getTemplate("blank");
+    if (!template) {
+      throw new Error("No database template is available.");
+    }
+    return serializeTimeLogYaml(template.content);
   }
 
   function formatDatabaseUpdatedAt(updatedAt: string | null | undefined): string {
@@ -1118,10 +1126,10 @@ export function DatabaseSection() {
             <TableCell>
               <Select value={databaseTemplateId} onValueChange={(value) => value && setDatabaseTemplateId(value)}>
                 <SelectTrigger className="w-[180px]">
-                  <SelectValue>{templates.find((template) => template.id === databaseTemplateId)?.name ?? "Blank"}</SelectValue>
+                  <SelectValue>{TEMPLATE_OPTIONS.find((template) => template.id === databaseTemplateId)?.name ?? "Blank"}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {templates.map((template) => (
+                  {TEMPLATE_OPTIONS.map((template) => (
                     <SelectItem key={template.id} value={template.id}>
                       {template.name}
                     </SelectItem>
@@ -1142,21 +1150,15 @@ export function DatabaseSection() {
 
   return (
     <>
+      {showSources ? (
       <Card className="border-white/60 bg-card/90 shadow-xl shadow-amber-950/5">
         <CardHeader className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div className="flex items-center gap-2">
-            <CardTitle>Manage Databases</CardTitle>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onClick={(event) => runButtonAction(event, syncManagedDatabaseReferences)}
-              title="Sync database references"
-            >
-              <RefreshCw className="size-4" />
-            </Button>
-          </div>
+          <CardTitle>Manage Databases</CardTitle>
           <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={(event) => runButtonAction(event, syncManagedDatabaseReferences)}>
+              <RefreshCw className="size-4" />
+              Sync
+            </Button>
             <Button type="button" variant="outline" size="sm" onClick={(event) => runButtonAction(event, importManagedDatabase)}>
               <Upload className="size-4" />
               Import
@@ -1171,10 +1173,12 @@ export function DatabaseSection() {
           {renderManagedDatabasesTable()}
         </CardContent>
       </Card>
+      ) : null}
 
-      <Card className="mt-6 border-white/60 bg-card/90 shadow-xl shadow-amber-950/5">
+      {showTrack ? (
+      <Card className={showSources ? "mt-6 border-white/60 bg-card/90 shadow-xl shadow-amber-950/5" : "border-white/60 bg-card/90 shadow-xl shadow-amber-950/5"}>
         <CardHeader className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <CardTitle>Fields</CardTitle>
+          <CardTitle>Track Fields</CardTitle>
         </CardHeader>
         <CardContent>
           {!file ? <p className="mb-4 text-sm text-muted-foreground">Manage databases to load metadata names from a CSDB file.</p> : null}
@@ -1227,7 +1231,9 @@ export function DatabaseSection() {
           </Table>
         </CardContent>
       </Card>
+      ) : null}
 
+      {showTrack ? (
       <Card className="mt-6 border-white/60 bg-card/90 shadow-xl shadow-amber-950/5">
         <CardHeader className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <CardTitle>Attribute References</CardTitle>
@@ -1337,13 +1343,16 @@ export function DatabaseSection() {
           ) : null}
         </CardContent>
       </Card>
+      ) : null}
 
-      <DatabaseReferenceSyncDialog
+      {showSources ? (
+        <DatabaseReferenceSyncDialog
         open={missingDatabaseReferences.length > 0}
         missingReferences={missingDatabaseReferences}
         onKeep={() => setMissingDatabaseReferences([])}
         onRemove={removeMissingManagedDatabaseReferences}
-      />
+        />
+      ) : null}
 
       <Dialog open={Boolean(editDialog)} onOpenChange={(open) => !open && setEditDialog(null)}>
         <DialogContent>

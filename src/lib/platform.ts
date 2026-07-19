@@ -36,8 +36,10 @@ export type NativeApi = {
   }) => Promise<{ handle: FileHandleInfo; registryUrl: string; raw: string } | null>;
   deleteDatabaseFile: (payload: { location: DatabaseLocation; url: string }) => Promise<void>;
   choosePath: () => Promise<string | null>;
-  listMarkdownFiles: (pattern: string, baseDir?: string) => Promise<string[]>;
+  listFiles: (pattern: string, baseDir?: string) => Promise<string[]>;
+  getTextFileInfo: (path: string) => Promise<{ path: string; exists: boolean; updatedAt: string | null }>;
   readTextFile: (path: string) => Promise<string>;
+  readFileDataUrl: (path: string) => Promise<string>;
   saveFile: (path: string, raw: string) => Promise<void>;
   watchFile: (path: string, callback: WatchCallback) => Promise<() => void>;
   onTrayAction: (callback: (action: string) => void) => () => void;
@@ -56,6 +58,25 @@ declare global {
 
 const memoryStore = new Map<string, string>();
 const memoryUpdatedAt = new Map<string, string>();
+
+function globToRegex(pattern: string): RegExp {
+  let source = "^";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    const next = pattern[index + 1];
+    if (char === "*" && next === "*") {
+      source += ".*";
+      index += 1;
+    } else if (char === "*") {
+      source += "[^/]*";
+    } else if (char === "?") {
+      source += ".";
+    } else {
+      source += char?.replace(/[\\^$+?.()|{}[\]]/g, "\\$&") ?? "";
+    }
+  }
+  return new RegExp(`${source}$`);
+}
 
 function internalDatabasePath(name: string): string {
   return `data/${name.trim().replace(/\.csdb$/i, "")}.csdb`;
@@ -203,11 +224,34 @@ export function getPlatformApi(): NativeApi {
       const value = window.prompt("Choose a path") ?? "";
       return value.trim().length > 0 ? value.trim() : null;
     },
-    async listMarkdownFiles(pattern) {
-      return pattern && /\.md$/i.test(pattern) ? [pattern] : [];
+    async listFiles(pattern, baseDir) {
+      const trimmed = pattern.trim();
+      if (!trimmed) {
+        return [];
+      }
+      const rooted = /^([a-z]+:)?[\\/]/i.test(trimmed) || !baseDir
+        ? trimmed
+        : `${baseDir.replace(/[\\/]$/, "")}/${trimmed}`;
+      if (!/[*?{}\[\]()+!@]/.test(trimmed)) {
+        const root = rooted.replace(/[\\/]$/, "");
+        const matches = [...memoryStore.keys()].filter((path) => path === root || path.startsWith(`${root}/`));
+        return matches.length > 0 || root.includes(".") ? (matches.length > 0 ? matches : [root]) : [];
+      }
+      const matcher = globToRegex(rooted);
+      return [...memoryStore.keys()].filter((path) => matcher.test(path));
+    },
+    async getTextFileInfo(path) {
+      return {
+        path,
+        exists: memoryStore.has(path),
+        updatedAt: memoryUpdatedAt.get(path) ?? null
+      };
     },
     async readTextFile(path) {
       return memoryStore.get(path) ?? "";
+    },
+    async readFileDataUrl(path) {
+      return `data:text/plain;charset=utf-8,${encodeURIComponent(memoryStore.get(path) ?? "")}`;
     },
     async saveFile(path, raw) {
       memoryStore.set(path, raw);

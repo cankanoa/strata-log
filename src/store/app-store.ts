@@ -16,21 +16,34 @@ import {
   type FieldOptionValueResolution
 } from "@/lib/time-log-database";
 import {
+  createGithubTask,
+  createMarkdownTaskText,
+  deleteGithubTask,
+  deleteMarkdownTaskText,
+  fetchGithubTaskFieldMetadata,
   fetchGithubIssueTasks,
   isGithubAuthError,
-  syncMarkdownTaskSource
+  syncMarkdownTaskSource,
+  updateGithubTaskField,
+  updateMarkdownTaskText
 } from "@/lib/task-sync";
+import { defaultGeneralSettings } from "@/lib/defaults";
 import { toIsoWithOffset } from "@/lib/time";
 import type {
+  ActiveTaskReference,
   AppSnapshot,
   EntryInterval,
   EntrySort,
   FieldDefinition,
   FileHandleInfo,
+  GeneralSettings,
+  MetadataValue,
   MetadataFilter,
   OnlineAccount,
   SessionPreset,
   SessionMetadata,
+  TaskFieldMetadata,
+  TaskSourceType,
   TaskSource,
   TimeLogFile
 } from "@/lib/types";
@@ -87,6 +100,18 @@ type StoreState = AppSnapshot & {
   deleteEntry: (entryId: string) => Promise<void>;
   updateSessionPresets: (presets: SessionPreset[]) => Promise<boolean>;
   updateTaskSources: (sources: TaskSource[]) => Promise<boolean>;
+  updateSettings: (settings: GeneralSettings) => Promise<boolean>;
+  updateInternalTaskColumns: (columns: Record<string, FieldDefinition>) => Promise<boolean>;
+  renameInternalTaskColumn: (previousName: string, nextName: string) => Promise<boolean>;
+  updateActiveTasks: (activeTasks: ActiveTaskReference[]) => Promise<boolean>;
+  createTask: (input: {
+    type: TaskSourceType;
+    sourceId?: string;
+    values: Record<string, MetadataValue>;
+    active?: boolean;
+  }) => Promise<boolean>;
+  deleteTask: (taskId: string) => Promise<boolean>;
+  updateTaskField: (taskId: string, field: TaskFieldMetadata, value: MetadataValue) => Promise<boolean>;
   updateAccounts: (accounts: OnlineAccount[]) => Promise<boolean>;
   syncTaskSource: (sourceId: string, githubToken?: string) => Promise<{ ok: boolean; authRequired?: boolean }>;
   startLiveEntry: (metadata: SessionMetadata) => Promise<boolean>;
@@ -180,6 +205,101 @@ function dirname(filePath: string): string {
   const parts = normalized.split("/");
   parts.pop();
   return parts.join("/") || ".";
+}
+
+function latestIso(values: Array<string | null | undefined>): string | undefined {
+  return values
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+}
+
+function isNewerThan(left: string | undefined, right: string | undefined): boolean {
+  if (!left) {
+    return false;
+  }
+  if (!right) {
+    return true;
+  }
+  return Date.parse(left) > Date.parse(right);
+}
+
+function settingsChanged(left: GeneralSettings | undefined, right: GeneralSettings): boolean {
+  return JSON.stringify(left ?? defaultGeneralSettings) !== JSON.stringify(right);
+}
+
+function valueText(value: MetadataValue): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    return value.map(String).filter((item) => item.trim()).join(", ") || undefined;
+  }
+  return String(value).trim() || undefined;
+}
+
+async function markdownPathsForSource(source: TaskSource, handlePath?: string): Promise<string[]> {
+  const api = getPlatformApi();
+  const listed = (await api.listFiles(source.url, handlePath ? dirname(handlePath) : undefined))
+    .filter((path) => /\.md$/i.test(path));
+  if (listed.length > 0) {
+    return listed;
+  }
+  return /\.md$/i.test(source.url.trim()) ? [source.url.trim()] : [];
+}
+
+function pruneActiveTasks(file: TimeLogFile): TimeLogFile {
+  const validKeys = new Set(file.tasks.map((task) => `tasks:${task.id}`));
+  const activeTasks = file.activeTasks.filter((reference) => validKeys.has(`${reference.table}:${reference.taskId}`));
+  return activeTasks.length === file.activeTasks.length ? file : TimeLogDatabase.setActiveTasks(file, activeTasks);
+}
+
+async function reloadTaskSource(file: TimeLogFile, source: TaskSource, handlePath?: string): Promise<TimeLogFile> {
+  const api = getPlatformApi();
+  if (source.type === "Internal Task") {
+    return pruneActiveTasks(file);
+  }
+
+  if (source.type === "Markdown") {
+    const paths = await markdownPathsForSource(source, handlePath);
+    const fileInfos = await Promise.all(paths.map((path) => api.getTextFileInfo(path)));
+    const tasks = syncMarkdownTaskSource(
+      file,
+      source,
+      await Promise.all(paths.map(async (path) => ({
+        path,
+        updatedAt: fileInfos.find((info) => info.path === path)?.updatedAt ?? undefined,
+        markdown: await api.readTextFile(path)
+      })))
+    );
+    const withSource = TimeLogDatabase.setTaskSources(
+      file,
+      file.taskSources.map((candidate) =>
+        candidate.id === source.id ? { ...candidate, lastUpdatedAt: latestIso(fileInfos.map((info) => info.updatedAt)) } : candidate
+      )
+    );
+    return pruneActiveTasks(TimeLogDatabase.replaceTasksForSource(withSource, source.id, tasks));
+  }
+
+  const account = file.accounts.find((candidate) => candidate.id === source.accountId);
+  const [fieldMetadata, tasks] = await Promise.all([
+    fetchGithubTaskFieldMetadata(source, account),
+    fetchGithubIssueTasks(file, source, account)
+  ]);
+  const settings = {
+    ...(file.settings ?? defaultGeneralSettings),
+    taskFieldMetadata: {
+      ...((file.settings ?? defaultGeneralSettings).taskFieldMetadata),
+      [source.id]: fieldMetadata
+    }
+  };
+  const withSettings = TimeLogDatabase.setSettings(file, settings);
+  const withSource = TimeLogDatabase.setTaskSources(
+    withSettings,
+    withSettings.taskSources.map((candidate) =>
+      candidate.id === source.id ? { ...candidate, lastUpdatedAt: latestIso(tasks.map((task) => task.updatedAt)) } : candidate
+    )
+  );
+  return pruneActiveTasks(TimeLogDatabase.replaceTasksForSource(withSource, source.id, tasks));
 }
 
 export const useAppStore = create<StoreState>((set, get) => ({
@@ -403,7 +523,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
     const state = get();
     const parsedCustom = Number.parseInt(state.focusCustomMinutes, 10);
     const durationSeconds =
-      state.focusCompletedAt && state.focusDurationSeconds > 0
+      state.focusDurationSeconds > 0
         ? state.focusDurationSeconds
         : state.focusCustomSelected
           ? (!Number.isNaN(parsedCustom) && parsedCustom > 0 ? parsedCustom * 60 : 0)
@@ -544,6 +664,271 @@ export const useAppStore = create<StoreState>((set, get) => ({
     return true;
   },
 
+  async updateSettings(settings) {
+    const current = get().file;
+    if (!current) {
+      set({ errors: ["Open a file before editing settings."] });
+      return false;
+    }
+    const next = TimeLogDatabase.setSettings(current, settings);
+    const validation = validateFile(next);
+    if (!validation.file) {
+      set({ errors: validation.errors });
+      return false;
+    }
+    set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+    await get().saveCurrentFile();
+    return true;
+  },
+
+  async updateInternalTaskColumns(columns) {
+    const current = get().file;
+    if (!current) {
+      set({ errors: ["Open a file before editing internal task columns."] });
+      return false;
+    }
+    const next = TimeLogDatabase.setInternalTaskColumns(current, columns);
+    const validation = validateFile(next);
+    if (!validation.file) {
+      set({ errors: validation.errors });
+      return false;
+    }
+    set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+    await get().saveCurrentFile();
+    return true;
+  },
+
+  async renameInternalTaskColumn(previousName, nextName) {
+    const current = get().file;
+    const trimmedName = nextName.trim();
+    if (!current || !trimmedName || current.internalTaskColumns[trimmedName]) {
+      return false;
+    }
+    const next = TimeLogDatabase.renameInternalTaskColumn(current, previousName, trimmedName);
+    const validation = validateFile(next);
+    if (!validation.file) {
+      set({ errors: validation.errors });
+      return false;
+    }
+    set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+    await get().saveCurrentFile();
+    return true;
+  },
+
+  async updateActiveTasks(activeTasks) {
+    const current = get().file;
+    if (!current) {
+      set({ errors: ["Open a file before editing active tasks."] });
+      return false;
+    }
+    const next = TimeLogDatabase.setActiveTasks(current, activeTasks);
+    const validation = validateFile(next);
+    if (!validation.file) {
+      set({ errors: validation.errors });
+      return false;
+    }
+    set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+    await get().saveCurrentFile();
+    return true;
+  },
+
+  async createTask(input) {
+    const current = get().file;
+    if (!current) {
+      set({ errors: ["Open a file before creating tasks."] });
+      return false;
+    }
+    const source = current.taskSources.find((candidate) =>
+      candidate.type === input.type && (!input.sourceId || candidate.id === input.sourceId)
+    );
+    if (!source) {
+      set({ errors: [`Create a ${input.type} task source before adding this task.`] });
+      return false;
+    }
+
+    const title = valueText(input.values.title) ?? valueText(input.values.contents) ?? "Untitled task";
+    const previousTaskIds = new Set(current.tasks.map((task) => task.id));
+    const handlePath = get().fileHandle?.path;
+    try {
+      let next = current;
+      let createdTaskId: string | undefined;
+      if (source.type === "Internal Task") {
+        const id = uuidv4();
+        const allowed = new Set(source.columnNames ?? []);
+        const values = Object.fromEntries(
+          Object.entries({
+            title,
+            status: input.values.status ?? true,
+            ...input.values
+          }).filter(([key]) => allowed.has(key))
+        );
+        next = TimeLogDatabase.setInternalTasks(current, [
+          ...current.internalTasks,
+          { id, taskSourceId: source.id, values }
+        ]);
+        createdTaskId = id;
+      } else if (source.type === "Markdown") {
+        const paths = await markdownPathsForSource(source, handlePath);
+        const path = paths[0];
+        if (!path) {
+          throw new Error("Markdown task source must point to at least one markdown file.");
+        }
+        await getPlatformApi().saveFile(
+          path,
+          createMarkdownTaskText(await getPlatformApi().readTextFile(path), {
+            title,
+            status: input.values.status ?? true,
+            ...input.values
+          })
+        );
+        next = await reloadTaskSource(current, source, handlePath);
+      } else {
+        const fieldMetadata = current.settings?.taskFieldMetadata[source.id] ?? [];
+        await createGithubTask(
+          source,
+          { title, status: input.values.status ?? true, ...input.values },
+          fieldMetadata,
+          current.accounts.find((account) => account.id === source.accountId)
+        );
+        next = await reloadTaskSource(current, source, handlePath);
+      }
+
+      createdTaskId ??= next.tasks.find((task) =>
+        !previousTaskIds.has(task.id) && task.sourceId === source.id && task.contents === title
+      )?.id;
+      if (input.active && createdTaskId) {
+        next = TimeLogDatabase.setActiveTasks(next, [
+          ...next.activeTasks,
+          { taskId: createdTaskId, table: "tasks" }
+        ]);
+      }
+      const validation = validateFile(next);
+      if (!validation.file) {
+        set({ errors: validation.errors });
+        return false;
+      }
+      set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+      await get().saveCurrentFile();
+      return true;
+    } catch (error) {
+      set({ errors: [error instanceof Error ? error.message : "Task creation failed."] });
+      return false;
+    }
+  },
+
+  async deleteTask(taskId) {
+    const current = get().file;
+    if (!current) {
+      set({ errors: ["Open a file before deleting tasks."] });
+      return false;
+    }
+    const task = current.tasks.find((candidate) => candidate.id === taskId);
+    const source = current.taskSources.find((candidate) => candidate.id === task?.sourceId);
+    if (!task || !source) {
+      set({ errors: ["Task was not found."] });
+      return false;
+    }
+
+    const handlePath = get().fileHandle?.path;
+    try {
+      let next: TimeLogFile;
+      if (source.type === "Internal Task") {
+        next = TimeLogDatabase.setInternalTasks(
+          current,
+          current.internalTasks.filter((candidate) => candidate.id !== taskId)
+        );
+      } else if (source.type === "Markdown") {
+        const filePath = typeof task.data.filePath === "string" ? task.data.filePath : task.url.replace(/:[^:]+$/, "");
+        await getPlatformApi().saveFile(
+          filePath,
+          deleteMarkdownTaskText(
+            await getPlatformApi().readTextFile(filePath),
+            task,
+            current.tasks.filter((candidate) => candidate.sourceId === source.id)
+          )
+        );
+        next = await reloadTaskSource(current, source, handlePath);
+      } else {
+        await deleteGithubTask(
+          source,
+          task,
+          current.tasks.filter((candidate) => candidate.sourceId === source.id),
+          current.accounts.find((account) => account.id === source.accountId)
+        );
+        next = await reloadTaskSource(current, source, handlePath);
+      }
+      const validation = validateFile(pruneActiveTasks(next));
+      if (!validation.file) {
+        set({ errors: validation.errors });
+        return false;
+      }
+      set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+      await get().saveCurrentFile();
+      return true;
+    } catch (error) {
+      set({ errors: [error instanceof Error ? error.message : "Task deletion failed."] });
+      return false;
+    }
+  },
+
+  async updateTaskField(taskId, field, value) {
+    const current = get().file;
+    if (!current) {
+      set({ errors: ["Open a file before editing tasks."] });
+      return false;
+    }
+    const task = current.tasks.find((candidate) => candidate.id === taskId);
+    const source = current.taskSources.find((candidate) => candidate.id === task?.sourceId);
+    if (!task || !source) {
+      set({ errors: ["Task was not found."] });
+      return false;
+    }
+    const updatedAt = new Date().toISOString();
+    try {
+      if (source.type === "Markdown") {
+        const filePath = typeof task.data.filePath === "string" ? task.data.filePath : task.url.replace(/:[^:]+$/, "");
+        const markdown = await getPlatformApi().readTextFile(filePath);
+        await getPlatformApi().saveFile(
+          filePath,
+          updateMarkdownTaskText(
+            markdown,
+            task,
+            current.tasks.filter((candidate) => candidate.sourceId === source.id),
+            field.path,
+            Array.isArray(value) ? value.join(", ") : String(value ?? "")
+          )
+        );
+      }
+      if (source.type === "Github") {
+        await updateGithubTaskField(
+          source,
+          task,
+          field,
+          value,
+          current.accounts.find((account) => account.id === source.accountId)
+        );
+      }
+      const withField = TimeLogDatabase.setTaskFieldValue(current, taskId, field.path, value);
+      const next = TimeLogDatabase.setTaskSources(
+        withField,
+        withField.taskSources.map((candidate) =>
+          candidate.id === source.id ? { ...candidate, lastUpdatedAt: updatedAt } : candidate
+        )
+      );
+      const validation = validateFile(next);
+      if (!validation.file) {
+        set({ errors: validation.errors });
+        return false;
+      }
+      set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+      await get().saveCurrentFile();
+      return true;
+    } catch (error) {
+      set({ errors: [error instanceof Error ? error.message : "Task update failed."] });
+      return false;
+    }
+  },
+
   async updateAccounts(accounts) {
     const current = get().file;
     if (!current) {
@@ -572,6 +957,9 @@ export const useAppStore = create<StoreState>((set, get) => ({
       set({ errors: ["Task source was not found."] });
       return { ok: false };
     }
+    if (source.type === "Internal Task") {
+      return { ok: true };
+    }
 
     let workingFile = current;
     let workingSource = source;
@@ -596,25 +984,72 @@ export const useAppStore = create<StoreState>((set, get) => ({
     try {
       const api = getPlatformApi();
       const handlePath = get().fileHandle?.path;
+      let sourceLastUpdatedAt = workingSource.lastUpdatedAt;
+      let nextSettings = workingFile.settings ?? defaultGeneralSettings;
       const tasks = workingSource.type === "Markdown"
-        ? syncMarkdownTaskSource(
-            workingFile,
-            workingSource,
-            await Promise.all(
-              (await api.listMarkdownFiles(
-                workingSource.url,
-                handlePath ? dirname(handlePath) : undefined
-              )).map(async (path) => ({
+        ? await (async () => {
+            const markdownPaths = (await api.listFiles(
+              workingSource.url,
+              handlePath ? dirname(handlePath) : undefined
+            )).filter((path) => /\.md$/i.test(path));
+            const fileInfos = await Promise.all(markdownPaths.map((path) => api.getTextFileInfo(path)));
+            sourceLastUpdatedAt = latestIso(fileInfos.map((info) => info.updatedAt));
+            if (!isNewerThan(sourceLastUpdatedAt, workingSource.lastUpdatedAt)) {
+              return null;
+            }
+            const markdownFiles = await Promise.all(
+              markdownPaths.map(async (path) => ({
                 path,
+                updatedAt: fileInfos.find((info) => info.path === path)?.updatedAt ?? undefined,
                 markdown: await api.readTextFile(path)
               }))
-            )
-          )
-        : await fetchGithubIssueTasks(
-            workingFile,
-            workingSource,
-            workingFile.accounts.find((account) => account.id === workingSource.accountId)
-          );
+            );
+            return syncMarkdownTaskSource(
+              workingFile,
+              workingSource,
+              markdownFiles
+            );
+          })()
+        : await (async () => {
+            const account = workingFile.accounts.find((candidate) => candidate.id === workingSource.accountId);
+            const [fieldMetadata, githubTasks] = await Promise.all([
+              fetchGithubTaskFieldMetadata(workingSource, account),
+              fetchGithubIssueTasks(
+                workingFile,
+                workingSource,
+                account
+              )
+            ]);
+            nextSettings = {
+              ...(workingFile.settings ?? defaultGeneralSettings),
+              taskFieldMetadata: {
+                ...((workingFile.settings ?? defaultGeneralSettings).taskFieldMetadata),
+                [workingSource.id]: fieldMetadata
+              }
+            };
+            sourceLastUpdatedAt = latestIso(githubTasks.map((task) => task.updatedAt));
+            if (!isNewerThan(sourceLastUpdatedAt, workingSource.lastUpdatedAt)) {
+              return null;
+            }
+            return githubTasks;
+          })();
+      if (tasks === null) {
+        if (settingsChanged(workingFile.settings, nextSettings)) {
+          const next = TimeLogDatabase.setSettings(workingFile, nextSettings);
+          const validation = validateFile(next);
+          if (validation.file) {
+            set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+            await get().saveCurrentFile();
+          }
+        }
+        return { ok: true };
+      }
+      workingFile = TimeLogDatabase.setTaskSources(
+        TimeLogDatabase.setSettings(workingFile, nextSettings),
+        workingFile.taskSources.map((candidate) =>
+          candidate.id === sourceId ? { ...candidate, lastUpdatedAt: sourceLastUpdatedAt } : candidate
+        )
+      );
       const next = TimeLogDatabase.replaceTasksForSource(workingFile, sourceId, tasks);
       const validation = validateFile(next);
       if (!validation.file) {

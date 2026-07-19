@@ -11,8 +11,9 @@ export const BUILTIN_FIELD_DEFINITIONS = {
 
 export const fieldTypeOptions: FieldType[] = [
   "string",
+  "markdown",
   "path",
-  "markdown_glob",
+  "file_search",
   "filter_task_sources",
   "attribute_reference",
   "bool",
@@ -21,6 +22,7 @@ export const fieldTypeOptions: FieldType[] = [
   "datetime",
   "uuid"
 ];
+export const internalTaskColumnTypeOptions: FieldType[] = ["string", "markdown", "bool", "int", "float", "datetime"];
 
 export const fieldSelectionOptions: FieldSelection[] = ["single", "select", "multiselect"];
 export const attributeReferenceSelectionOptions: FieldSelection[] = ["select", "multiselect"];
@@ -37,13 +39,13 @@ export type ParsedFieldOption = {
 
 export function normalizeFieldDefinition(field: FieldDefinition): FieldDefinition {
   const rawSelection = field.selection ?? "single";
-  const selection = field.type === "bool"
+  const selection = field.type === "bool" || field.type === "markdown"
     ? "single"
     : field.type === "filter_task_sources" && !taskSourceSelectionOptions.includes(rawSelection)
       ? "select"
       : rawSelection;
   const options =
-    field.type === "bool" || field.type === "filter_task_sources" || selection === "single"
+    field.type === "bool" || field.type === "markdown" || field.type === "filter_task_sources" || selection === "single"
       ? undefined
       : field.options?.filter((value) => value.trim().length > 0);
   const visibility = normalizeFieldVisibility({
@@ -107,7 +109,7 @@ export function getSelectionOptionsForFieldType(type: FieldType): FieldSelection
   if (type === "filter_task_sources") {
     return taskSourceSelectionOptions;
   }
-  if (type === "bool") {
+  if (type === "bool" || type === "markdown") {
     return boolSelectionOptions;
   }
   return fieldSelectionOptions;
@@ -196,8 +198,9 @@ export function parseMetadataValueForField(field: FieldDefinition | undefined, v
   switch (field.type) {
     case "uuid":
     case "string":
+    case "markdown":
     case "path":
-    case "markdown_glob":
+    case "file_search":
     case "filter_task_sources":
     case "attribute_reference":
     case "datetime":
@@ -304,7 +307,7 @@ export function formatMetadataFieldValue(field: FieldDefinition | undefined, val
   if (field.type === "datetime") {
     return formatDateTimeValue(value as string | undefined);
   }
-  if (field.type === "path" || field.type === "markdown_glob") {
+  if (field.type === "markdown" || field.type === "path" || field.type === "file_search") {
     return typeof value === "string" && value.trim().length > 0 ? value : "—";
   }
   return getMetadataDisplayValue(value);
@@ -389,7 +392,8 @@ export function normalizeMetadataValue(field: FieldDefinition, value: MetadataVa
       return Number.isNaN(parsed) ? undefined : parsed;
     }
     case "path":
-    case "markdown_glob":
+    case "markdown":
+    case "file_search":
     case "attribute_reference":
     case "uuid":
     default:

@@ -30,7 +30,7 @@ export const EntryQueryService = {
     return entries.filter((entry) =>
       filters.every((filter) => {
         const metadata = resolveEntryMetadata(
-          file ?? (fields ? { version: 1, fields, attributeReferenceGroups: [], sessionPresets: [], taskSources: [], tasks: [], accounts: [], entries: [] } : undefined),
+          file ?? (fields ? { version: 1, fields, attributeReferenceGroups: [], sessionPresets: [], taskSources: [], tasks: [], internalTaskColumns: {}, internalTasks: [], activeTasks: [], accounts: [], entries: [] } : undefined),
           entry
         );
         const value =
@@ -52,7 +52,7 @@ export const EntryQueryService = {
 
   resolveSortValue(entry: EntryInterval, key: string, fields?: Record<string, FieldDefinition>, file?: TimeLogFile | null): string | number {
     const metadata = resolveEntryMetadata(
-      file ?? (fields ? { version: 1, fields, attributeReferenceGroups: [], sessionPresets: [], taskSources: [], tasks: [], accounts: [], entries: [] } : undefined),
+      file ?? (fields ? { version: 1, fields, attributeReferenceGroups: [], sessionPresets: [], taskSources: [], tasks: [], internalTaskColumns: {}, internalTasks: [], activeTasks: [], accounts: [], entries: [] } : undefined),
       entry
     );
     const bounds = getSessionBounds(entry);

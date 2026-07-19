@@ -1,27 +1,89 @@
 import { v4 as uuidv4 } from "uuid";
 import { LexoRank } from "lexorank";
 import { Octokit } from "@octokit/rest";
-import type { OnlineAccount, TaskRow, TaskSource, TimeLogFile } from "@/lib/types";
+import { extractMarkdownFieldsFromData, hashMarkdownTask } from "@/lib/markdown-task-identity";
+import type { MetadataValue, OnlineAccount, TaskFieldMetadata, TaskRow, TaskSource, TimeLogFile } from "@/lib/types";
 
 type ParsedMarkdownTask = {
   filePath: string;
   contents: string;
-  status?: "completed";
+  status: boolean;
   rank: string;
   parentIndex?: number;
+  fields: Record<string, string>;
+  hash: string;
+  byteLength: number;
+  startByte: number;
+  endByte: number;
+  startIndex: number;
+  endIndex: number;
+  indent: string;
+  marker: string;
+  prefix: string;
+  checked: boolean;
+  lineEnd: string;
 };
 
 export type MarkdownTaskFile = {
   path: string;
   markdown: string;
+  updatedAt?: string;
 };
 
-const TASK_BULLET_PATTERN = /^(\s*)[-*+]\s*\[\s*([xX]?)\s*\]\s+(.*)$/;
+const TASK_FIELD_PATTERN = /\s*\[([^\[\]:]+)::\s*([^\]]*)\]/g;
 const STANDARD_FIELD_ALIASES = {
   title: ["title", "name", "contents", "content", "text", "summary"],
   status: ["status", "state", "completed", "done", "checked"],
   url: ["html_url", "url", "link", "path", "filePath"]
 };
+
+const GITHUB_ISSUE_STATE_OPTIONS = ["open", "closed"];
+const GITHUB_ISSUE_STATE_REASON_OPTIONS = ["completed", "not_planned", "duplicate", "reopened"];
+const textEncoder = new TextEncoder();
+
+function byteLength(text: string): number {
+  return textEncoder.encode(text).length;
+}
+
+function markdownLines(markdown: string): Array<{
+  line: string;
+  lineEnd: string;
+  startIndex: number;
+  endIndex: number;
+  startByte: number;
+  endByte: number;
+}> {
+  const lines: Array<{
+    line: string;
+    lineEnd: string;
+    startIndex: number;
+    endIndex: number;
+    startByte: number;
+    endByte: number;
+  }> = [];
+  let startIndex = 0;
+  let startByte = 0;
+  const matcher = /([^\r\n]*)(\r\n|\n|\r|$)/g;
+  let match: RegExpExecArray | null;
+  while ((match = matcher.exec(markdown))) {
+    if (match[0] === "" && match.index === markdown.length) {
+      break;
+    }
+    const raw = match[0];
+    const rawByteLength = byteLength(raw);
+    lines.push({
+      line: match[1],
+      lineEnd: match[2],
+      startIndex,
+      endIndex: startIndex + raw.length,
+      startByte,
+      endByte: startByte + rawByteLength
+    });
+    startIndex += raw.length;
+    startByte += rawByteLength;
+  }
+  return lines;
+}
 
 function toJsonObject(value: unknown): Record<string, unknown> {
   try {
@@ -40,7 +102,9 @@ function findAliasedValue(value: unknown, aliases: string[], depth = 0): unknown
   }
   const entries = Object.entries(value as Record<string, unknown>);
   for (const alias of aliases) {
-    const direct = entries.find(([key]) => alias.toLowerCase() === key.toLowerCase());
+    const direct = entries.find(([key, child]) =>
+      alias.toLowerCase() === key.toLowerCase() && child !== undefined && child !== null
+    );
     if (direct) {
       return direct[1];
     }
@@ -64,15 +128,24 @@ function valueText(value: unknown): string | undefined {
   return undefined;
 }
 
-function standardStatus(value: unknown): "completed" | undefined {
-  if (value === true) {
-    return "completed";
+function standardStatus(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
   }
   const text = valueText(value)?.toLowerCase();
-  return text && ["x", "true", "completed", "complete", "closed", "done"].includes(text) ? "completed" : undefined;
+  if (!text) {
+    return undefined;
+  }
+  if (["open", "active", "true", "1"].includes(text)) {
+    return true;
+  }
+  if (["x", "false", "0", "closed", "completed", "complete", "done"].includes(text)) {
+    return false;
+  }
+  return undefined;
 }
 
-function standardTaskFields(data: Record<string, unknown>, fallback: { title: string; url: string; status?: "completed" }) {
+function standardTaskFields(data: Record<string, unknown>, fallback: { title: string; url: string; status: boolean }) {
   return {
     contents: valueText(findAliasedValue(data, STANDARD_FIELD_ALIASES.title)) ?? fallback.title,
     url: valueText(findAliasedValue(data, STANDARD_FIELD_ALIASES.url)) ?? fallback.url,
@@ -80,35 +153,109 @@ function standardTaskFields(data: Record<string, unknown>, fallback: { title: st
   };
 }
 
+function parseMarkdownTaskContents(rawContents: string): { contents: string; fields: Record<string, string> } {
+  const fields: Record<string, string> = {};
+  const contents = rawContents.replace(TASK_FIELD_PATTERN, (_match, key: string, value: string) => {
+    const name = key.trim();
+    if (name) {
+      fields[name] = value.trim();
+    }
+    return "";
+  }).replace(/\s{2,}/g, " ").trim();
+  return { contents, fields };
+}
+
+function parseMarkdownTaskLine(line: string): {
+  body: string;
+  checked: boolean;
+  indent: string;
+  marker: string;
+  prefix: string;
+} | null {
+  const indentLength = line.match(/^\s*/)?.[0].length ?? 0;
+  let index = indentLength;
+  const indent = line.slice(0, indentLength);
+  let marker = "";
+  let prefix = indent;
+  if (line[index] && "-*+".includes(line[index]) && /\s/.test(line[index + 1] ?? "")) {
+    marker = line[index];
+    index += 2;
+    while (line[index] === " " || line[index] === "\t") {
+      index += 1;
+    }
+    prefix = line.slice(0, index);
+  }
+  if (line[index] !== "[") {
+    return null;
+  }
+  const check = line[index + 1];
+  let checked = false;
+  let bodyStart = -1;
+  if ((check === "x" || check === "X") && line[index + 2] === "]") {
+    checked = true;
+    bodyStart = index + 3;
+  } else if (check === "]") {
+    bodyStart = index + 2;
+  } else if ((check === " " || check === "\t") && line[index + 2] === "]") {
+    bodyStart = index + 3;
+  }
+  if (bodyStart < 0) {
+    return null;
+  }
+  return {
+    body: line.slice(bodyStart).trim(),
+    checked,
+    indent,
+    marker,
+    prefix
+  };
+}
+
 export function parseMarkdownTasks(filePath: string, markdown: string): ParsedMarkdownTask[] {
   let rank = LexoRank.middle();
   const tasks: ParsedMarkdownTask[] = [];
   const parentStack: Array<{ indent: number; index: number }> = [];
+  let previousTaskEndByte = 0;
 
-  markdown.split(/\r?\n/).forEach((line) => {
-    const match = line.match(TASK_BULLET_PATTERN);
+  markdownLines(markdown).forEach((line) => {
+    const match = parseMarkdownTaskLine(line.line);
     if (!match) {
       return;
     }
-    const contents = match[3].trim();
+    const parsedContents = parseMarkdownTaskContents(match.body);
+    const contents = parsedContents.contents;
     if (!contents) {
       return;
     }
 
-    const indent = match[1].replace(/\t/g, "    ").length;
+    const indent = match.indent.replace(/\t/g, "    ").length;
     while (parentStack.length > 0 && parentStack.at(-1)!.indent >= indent) {
       parentStack.pop();
     }
+    const taskHash = hashMarkdownTask(contents, parsedContents.fields);
     const task: ParsedMarkdownTask = {
       filePath,
       contents,
-      status: match[2] ? "completed" as const : undefined,
+      status: !match.checked,
       rank: rank.toString(),
-      parentIndex: parentStack.at(-1)?.index
+      parentIndex: parentStack.at(-1)?.index,
+      fields: parsedContents.fields,
+      hash: taskHash,
+      byteLength: line.endByte - previousTaskEndByte,
+      startByte: line.startByte,
+      endByte: line.endByte,
+      startIndex: line.startIndex,
+      endIndex: line.endIndex,
+      indent: match.indent,
+      marker: match.marker,
+      prefix: match.prefix,
+      checked: match.checked,
+      lineEnd: line.lineEnd
     };
     tasks.push(task);
     parentStack.push({ indent, index: tasks.length - 1 });
     rank = rank.genNext();
+    previousTaskEndByte = line.endByte;
   });
 
   return tasks;
@@ -127,31 +274,39 @@ function takeFirst(map: Map<string, TaskRow[]>, key: string): TaskRow | undefine
   return row;
 }
 
+function markdownTaskFilePath(task: TaskRow): string {
+  return typeof task.data.filePath === "string" ? task.data.filePath : task.url.replace(/:[^:]+$/, "");
+}
+
+function markdownTaskHash(task: TaskRow): string {
+  return task.hash ?? hashMarkdownTask(task.contents, extractMarkdownFieldsFromData(task.data));
+}
+
+function markdownTaskSort(left: TaskRow, right: TaskRow): number {
+  return left.url.localeCompare(right.url) || left.rank.localeCompare(right.rank);
+}
+
 export function syncMarkdownTaskSource(file: TimeLogFile, source: TaskSource, files: MarkdownTaskFile[]): TaskRow[] {
-  const existingByFileAndContents = new Map<string, TaskRow[]>();
-  const existingByContents = new Map<string, TaskRow[]>();
-  sourceTasks(file, source.id).forEach((task) => {
-    const filePath = task.url.replace(/:[^:]+$/, "");
-    const fileKey = `${filePath}\0${task.contents}`;
-    existingByFileAndContents.set(fileKey, [...(existingByFileAndContents.get(fileKey) ?? []), task]);
-    existingByContents.set(task.contents, [...(existingByContents.get(task.contents) ?? []), task]);
+  const existingByFileAndHash = new Map<string, TaskRow[]>();
+  [...sourceTasks(file, source.id)].sort(markdownTaskSort).forEach((task) => {
+    const fileKey = `${markdownTaskFilePath(task)}\0${markdownTaskHash(task)}`;
+    existingByFileAndHash.set(fileKey, [...(existingByFileAndHash.get(fileKey) ?? []), task]);
   });
 
   return files.flatMap((taskFile) => {
     const parsedTasks = parseMarkdownTasks(taskFile.path, taskFile.markdown);
     const syncedTasks = parsedTasks.map((parsed) => {
-      const existing =
-        takeFirst(existingByFileAndContents, `${parsed.filePath}\0${parsed.contents}`) ??
-        takeFirst(existingByContents, parsed.contents);
+      const existing = takeFirst(existingByFileAndHash, `${parsed.filePath}\0${parsed.hash}`);
       const data = {
         title: parsed.contents,
         content: parsed.contents,
         status: parsed.status,
-        checked: parsed.status === "completed",
+        checked: parsed.checked,
         filePath: parsed.filePath,
         url: `${parsed.filePath}:${parsed.rank}`,
         rank: parsed.rank,
-        __strata: { sourceType: "Markdown" }
+        ...parsed.fields,
+        __strata: { sourceType: "Markdown", markdownFields: parsed.fields }
       };
       const standard = standardTaskFields(data, {
         title: parsed.contents,
@@ -166,6 +321,9 @@ export function syncMarkdownTaskSource(file: TimeLogFile, source: TaskSource, fi
         contents: standard.contents,
         status: standard.status,
         rank: parsed.rank,
+        hash: parsed.hash,
+        byteLength: parsed.byteLength,
+        updatedAt: taskFile.updatedAt ?? existing?.updatedAt,
         data
       };
     });
@@ -179,6 +337,11 @@ export function syncMarkdownTaskSource(file: TimeLogFile, source: TaskSource, fi
   });
 }
 
+function repoMatch(source: TaskSource): { owner: string; repo: string } | null {
+  const match = source.url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)(?:\/.*)?$/i);
+  return match ? { owner: match[1], repo: match[2] } : null;
+}
+
 export function isGithubAuthError(error: unknown): boolean {
   const status = typeof error === "object" && error && "status" in error ? Number(error.status) : 0;
   return [401, 403, 404].includes(status);
@@ -189,15 +352,15 @@ export async function fetchGithubIssueTasks(
   source: TaskSource,
   account?: OnlineAccount
 ): Promise<TaskRow[]> {
-  const match = source.url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)(?:\/.*)?$/i);
-  if (!match) {
+  const repo = repoMatch(source);
+  if (!repo) {
     return [];
   }
 
   const octokit = new Octokit(account?.token ? { auth: account.token } : {});
   const issues = await octokit.paginate(octokit.rest.issues.listForRepo, {
-    owner: match[1],
-    repo: match[2],
+    owner: repo.owner,
+    repo: repo.repo,
     state: "open",
     per_page: 100
   });
@@ -221,7 +384,7 @@ export async function fetchGithubIssueTasks(
       const issueStandard = standardTaskFields(issueData, {
         title: issue.title,
         url,
-        status: undefined
+        status: issue.state !== "closed"
       });
       const existing = existingByUrl.get(issueStandard.url) ?? takeFirst(existingByContents, issueStandard.contents);
       const issueTask: TaskRow = {
@@ -232,6 +395,7 @@ export async function fetchGithubIssueTasks(
         contents: issueStandard.contents,
         status: issueStandard.status,
         rank: rank.toString(),
+        updatedAt: issue.updated_at ?? existing?.updatedAt,
         data: issueData
       };
       rank = rank.genNext();
@@ -242,7 +406,7 @@ export async function fetchGithubIssueTasks(
           title: parsed.contents,
           content: parsed.contents,
           status: parsed.status,
-          checked: parsed.status === "completed",
+          checked: parsed.checked,
           url: childUrl,
           parentUrl: url,
           parentIssue: issueData,
@@ -264,6 +428,7 @@ export async function fetchGithubIssueTasks(
           contents: childStandard.contents,
           status: childStandard.status,
           rank: parsed.rank,
+          updatedAt: issue.updated_at ?? existingChild?.updatedAt,
           data: childData
         };
       });
@@ -278,4 +443,462 @@ export async function fetchGithubIssueTasks(
         }))
       ];
     });
+}
+
+async function optionalPaginated<T>(callback: () => Promise<T[]>): Promise<T[]> {
+  try {
+    return await callback();
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchGithubTaskFieldMetadata(
+  source: TaskSource,
+  account?: OnlineAccount
+): Promise<TaskFieldMetadata[]> {
+  const repo = repoMatch(source);
+  if (!repo) {
+    return [];
+  }
+  const octokit = new Octokit(account?.token ? { auth: account.token } : {});
+  const [labels, assignees, milestones, issueTypes, issueFields] = await Promise.all([
+    optionalPaginated(() => octokit.paginate(octokit.rest.issues.listLabelsForRepo, {
+      owner: repo.owner,
+      repo: repo.repo,
+      per_page: 100
+    })),
+    optionalPaginated(() => octokit.paginate(octokit.rest.issues.listAssignees, {
+      owner: repo.owner,
+      repo: repo.repo,
+      per_page: 100
+    })),
+    optionalPaginated(() => octokit.paginate(octokit.rest.issues.listMilestones, {
+      owner: repo.owner,
+      repo: repo.repo,
+      state: "all",
+      per_page: 100
+    })),
+    optionalPaginated(() => octokit.paginate("GET /repos/{owner}/{repo}/issue-types", {
+      owner: repo.owner,
+      repo: repo.repo,
+      per_page: 100
+    } as never) as Promise<Array<{ name?: string }>>),
+    optionalPaginated(() => octokit.paginate("GET /orgs/{org}/issue-fields", {
+      org: repo.owner,
+      per_page: 100
+    } as never) as Promise<Array<{
+      id?: number;
+      name?: string;
+      data_type?: string;
+      options?: Array<{ name?: string }>;
+    }>>)
+  ]);
+
+  const baseFields: TaskFieldMetadata[] = [
+    { sourceId: source.id, path: "title", label: "Title", type: "string", editable: true, updateKind: "github_issue" },
+    { sourceId: source.id, path: "body", label: "Body", type: "markdown", editable: true, updateKind: "github_issue" },
+    { sourceId: source.id, path: "state", label: "State", type: "select", editable: true, options: GITHUB_ISSUE_STATE_OPTIONS, updateKind: "github_issue" },
+    { sourceId: source.id, path: "state_reason", label: "State Reason", type: "select", editable: true, options: GITHUB_ISSUE_STATE_REASON_OPTIONS, updateKind: "github_issue" },
+    {
+      sourceId: source.id,
+      path: "labels",
+      label: "Labels",
+      type: "multiselect",
+      editable: true,
+      options: labels.map((label) => label.name).filter((name): name is string => Boolean(name)),
+      updateKind: "github_issue"
+    },
+    {
+      sourceId: source.id,
+      path: "assignees",
+      label: "Assignees",
+      type: "multiselect",
+      editable: true,
+      options: assignees.map((assignee) => assignee.login).filter((name): name is string => Boolean(name)),
+      updateKind: "github_issue"
+    },
+    {
+      sourceId: source.id,
+      path: "milestone",
+      label: "Milestone",
+      type: "select",
+      editable: true,
+      options: milestones.map((milestone) => milestone.title).filter((name): name is string => Boolean(name)),
+      updateKind: "github_issue"
+    },
+    {
+      sourceId: source.id,
+      path: "type",
+      label: "Issue Type",
+      type: "select",
+      editable: true,
+      options: issueTypes.map((type) => type.name).filter((name): name is string => Boolean(name)),
+      updateKind: "github_issue"
+    }
+  ];
+
+  const customFields = issueFields.map<TaskFieldMetadata>((field) => ({
+    sourceId: source.id,
+    path: `issue_field_values.${field.name ?? field.id}`,
+    label: field.name ?? `Field ${field.id}`,
+    type: field.data_type === "number"
+      ? "number"
+      : field.data_type === "date"
+        ? "datetime"
+        : field.data_type === "single_select"
+          ? "select"
+          : field.data_type === "multi_select"
+            ? "multiselect"
+            : "string",
+    editable: true,
+    options: field.options?.map((option) => option.name).filter((name): name is string => Boolean(name)),
+    fieldId: field.id,
+    updateKind: "github_issue_field"
+  }));
+
+  return [...baseFields, ...customFields];
+}
+
+function issueNumber(task: TaskRow): number | null {
+  const raw = typeof task.data.number === "number"
+    ? task.data.number
+    : Number(String(task.url.match(/\/issues\/(\d+)/)?.[1] ?? ""));
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+function parentIssueNumber(task: TaskRow): number | null {
+  const parentIssue = task.data.parentIssue;
+  const raw = parentIssue && typeof parentIssue === "object" && "number" in parentIssue
+    ? Number((parentIssue as { number?: unknown }).number)
+    : Number(String(task.url.match(/\/issues\/(\d+)/)?.[1] ?? ""));
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+function valueArray(value: MetadataValue): string[] {
+  return Array.isArray(value)
+    ? value.map(String).filter((item) => item.trim().length > 0)
+    : typeof value === "string" && value.trim()
+      ? [value.trim()]
+      : [];
+}
+
+function valueString(value: MetadataValue): string | null {
+  if (value === undefined || Array.isArray(value)) {
+    return null;
+  }
+  return value === null ? null : String(value);
+}
+
+function valueRecordText(value: MetadataValue): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    const text = value.map(String).filter((item) => item.trim()).join(", ");
+    return text || null;
+  }
+  const text = String(value).trim();
+  return text || null;
+}
+
+function openStatusFromValue(value: MetadataValue): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  return openStatusFromText(valueRecordText(value) ?? "") ?? true;
+}
+
+function markdownTaskLineFromValues(values: Record<string, MetadataValue>): string {
+  const contents = valueRecordText(values.title) ?? valueRecordText(values.contents) ?? "Untitled task";
+  const checked = !openStatusFromValue(values.status);
+  const fields = Object.entries(values)
+    .filter(([key]) => !["contents", "status", "title"].includes(key))
+    .flatMap(([key, value]) => {
+      const text = valueRecordText(value);
+      return text ? [` [${key.replace(/^data:/, "")}:: ${text}]`] : [];
+    })
+    .join("");
+  return `- [${checked ? "x" : " "}] ${contents}${fields}`;
+}
+
+export function createMarkdownTaskText(markdown: string, values: Record<string, MetadataValue>): string {
+  const line = markdownTaskLineFromValues(values);
+  if (!markdown.trim()) {
+    return `${line}\n`;
+  }
+  return `${markdown}${markdown.endsWith("\n") ? "" : "\n"}${line}\n`;
+}
+
+export async function updateGithubTaskField(
+  source: TaskSource,
+  task: TaskRow,
+  field: TaskFieldMetadata,
+  value: MetadataValue,
+  account?: OnlineAccount
+): Promise<void> {
+  const repo = repoMatch(source);
+  const number = issueNumber(task);
+  const rawObjectType = task.data.__strata && typeof task.data.__strata === "object"
+    ? (task.data.__strata as { rawObjectType?: string }).rawObjectType
+    : undefined;
+  if (!repo) {
+    return;
+  }
+  const octokit = new Octokit(account?.token ? { auth: account.token } : {});
+  if (field.path === "status" && rawObjectType === "github_checklist_task") {
+    const parentNumber = parentIssueNumber(task);
+    if (!parentNumber) {
+      return;
+    }
+    const issue = await octokit.rest.issues.get({ owner: repo.owner, repo: repo.repo, issue_number: parentNumber });
+    await octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
+      owner: repo.owner,
+      repo: repo.repo,
+      issue_number: parentNumber,
+      body: updateMarkdownTaskText(issue.data.body ?? "", task, [task], "status", value === false ? "closed" : "open")
+    });
+    return;
+  }
+  if (!number || rawObjectType !== "github_issue") {
+    return;
+  }
+  if (field.updateKind === "github_issue_field" && field.fieldId !== undefined) {
+    await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/issue-field-values", {
+      owner: repo.owner,
+      repo: repo.repo,
+      issue_number: number,
+      issue_field_values: [{
+        field_id: Number(field.fieldId),
+        value: field.type === "multiselect" ? valueArray(value) : valueString(value) ?? ""
+      }]
+    } as never);
+    return;
+  }
+
+  const payload: Record<string, unknown> = {};
+  const path = field.path === "contents" ? "title" : field.path === "status" ? "state" : field.path;
+  if (path === "labels" || path === "assignees") {
+    payload[path] = valueArray(value);
+  } else if (path === "milestone") {
+    payload[path] = valueString(value);
+  } else if (["title", "body", "state", "state_reason", "type"].includes(path)) {
+    payload[path] = field.path === "status" ? (value === false ? "closed" : "open") : valueString(value);
+  } else {
+    return;
+  }
+  await octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
+    owner: repo.owner,
+    repo: repo.repo,
+    issue_number: number,
+    ...payload
+  } as never);
+}
+
+export async function createGithubTask(
+  source: TaskSource,
+  values: Record<string, MetadataValue>,
+  fields: TaskFieldMetadata[],
+  account?: OnlineAccount
+): Promise<void> {
+  const repo = repoMatch(source);
+  if (!repo) {
+    throw new Error("GitHub task source URL must be a repository URL.");
+  }
+  const octokit = new Octokit(account?.token ? { auth: account.token } : {});
+  const response = await octokit.rest.issues.create({
+    owner: repo.owner,
+    repo: repo.repo,
+    title: valueRecordText(values.title) ?? valueRecordText(values.contents) ?? "Untitled task",
+    body: valueRecordText(values.body) ?? undefined,
+    labels: valueArray(values.labels),
+    assignees: valueArray(values.assignees)
+  });
+  const issueData = {
+    ...toJsonObject(response.data),
+    __strata: { sourceType: "Github", rawObjectType: "github_issue" }
+  };
+  const task: TaskRow = {
+    id: uuidv4(),
+    sourceId: source.id,
+    type: "Github",
+    url: response.data.html_url ?? `${source.url}/issues/${response.data.number}`,
+    contents: response.data.title,
+    status: response.data.state !== "closed",
+    rank: LexoRank.middle().toString(),
+    updatedAt: response.data.updated_at ?? undefined,
+    data: issueData
+  };
+  if (values.status !== undefined) {
+    await updateGithubTaskField(
+      source,
+      task,
+      {
+        sourceId: source.id,
+        path: "status",
+        label: "Status",
+        type: "bool",
+        editable: true,
+        options: ["Open", "Closed"],
+        updateKind: "github_issue"
+      },
+      values.status,
+      account
+    );
+  }
+  await Promise.all(
+    fields
+      .filter((field) => field.editable && !["assignees", "body", "labels", "title"].includes(field.path) && values[field.path] !== undefined)
+      .map((field) => updateGithubTaskField(source, task, field, values[field.path], account))
+  );
+}
+
+export async function deleteGithubTask(
+  source: TaskSource,
+  task: TaskRow,
+  tasks: TaskRow[],
+  account?: OnlineAccount
+): Promise<void> {
+  const repo = repoMatch(source);
+  if (!repo) {
+    throw new Error("GitHub task source URL must be a repository URL.");
+  }
+  const octokit = new Octokit(account?.token ? { auth: account.token } : {});
+  const rawObjectType = task.data.__strata && typeof task.data.__strata === "object"
+    ? (task.data.__strata as { rawObjectType?: string }).rawObjectType
+    : undefined;
+  if (rawObjectType === "github_checklist_task") {
+    const number = parentIssueNumber(task);
+    if (!number) {
+      throw new Error("GitHub checklist parent issue could not be found.");
+    }
+    const issue = await octokit.rest.issues.get({ owner: repo.owner, repo: repo.repo, issue_number: number });
+    await octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
+      owner: repo.owner,
+      repo: repo.repo,
+      issue_number: number,
+      body: deleteMarkdownTaskText(issue.data.body ?? "", task, tasks)
+    });
+    return;
+  }
+  const number = issueNumber(task);
+  if (!number) {
+    throw new Error("GitHub issue number could not be found.");
+  }
+  await octokit.request("DELETE /repos/{owner}/{repo}/issues/{issue_number}", {
+    owner: repo.owner,
+    repo: repo.repo,
+    issue_number: number
+  } as never);
+}
+
+function markdownTaskLineFromParsed(parsed: ParsedMarkdownTask, checked: boolean): string {
+  const fields = Object.entries(parsed.fields)
+    .filter(([, value]) => value.trim().length > 0)
+    .map(([key, value]) => ` [${key}:: ${value}]`)
+    .join("");
+  return `${parsed.prefix}[${checked ? "x" : " "}] ${parsed.contents}${fields}${parsed.lineEnd}`;
+}
+
+function openStatusFromText(value: string): boolean | undefined {
+  const text = value.toLowerCase().trim();
+  if (["open", "active", "true", "1"].includes(text)) {
+    return true;
+  }
+  if (["closed", "completed", "complete", "done", "false", "0", "x"].includes(text)) {
+    return false;
+  }
+  return undefined;
+}
+
+export function estimateMarkdownTaskAnchorByte(task: TaskRow, tasks: TaskRow[]): number {
+  const filePath = markdownTaskFilePath(task);
+  let byteOffset = 0;
+  const orderedTasks = tasks
+    .filter((candidate) => candidate.type === "Markdown" && markdownTaskFilePath(candidate) === filePath)
+    .sort(markdownTaskSort);
+  for (const candidate of orderedTasks) {
+    if (candidate.id === task.id) {
+      return byteOffset;
+    }
+    byteOffset += Math.max(0, Math.floor(candidate.byteLength ?? 0));
+  }
+  return 0;
+}
+
+export function locateMarkdownTask(markdown: string, task: TaskRow, tasks: TaskRow[] = [task]): ParsedMarkdownTask | null {
+  const filePath = markdownTaskFilePath(task);
+  const targetHash = markdownTaskHash(task);
+  const anchorByte = estimateMarkdownTaskAnchorByte(task, tasks);
+  const parsedTasks = parseMarkdownTasks(filePath, markdown);
+  const forwardTasks = parsedTasks
+    .filter((candidate) => candidate.startByte >= anchorByte)
+    .sort((left, right) => left.startByte - right.startByte);
+  for (const candidate of forwardTasks) {
+    if (candidate.hash === targetHash) {
+      return candidate;
+    }
+  }
+  const backwardTasks = parsedTasks
+    .filter((candidate) => candidate.startByte < anchorByte)
+    .sort((left, right) => right.startByte - left.startByte);
+  for (const candidate of backwardTasks) {
+    if (candidate.hash === targetHash) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function updateParsedMarkdownTask(parsed: ParsedMarkdownTask, path: string, value: string): ParsedMarkdownTask {
+  const next: ParsedMarkdownTask = {
+    ...parsed,
+    fields: { ...parsed.fields }
+  };
+  if (path === "contents" || path === "title") {
+    next.contents = value;
+  } else if (path === "status") {
+    next.status = openStatusFromText(value) ?? true;
+    next.checked = next.status === false;
+  } else {
+    const fieldName = path.replace(/^data:/, "");
+    if (value.trim()) {
+      next.fields[fieldName] = value;
+    } else {
+      delete next.fields[fieldName];
+    }
+  }
+  next.hash = hashMarkdownTask(next.contents, next.fields);
+  return next;
+}
+
+export function replaceMarkdownTask(
+  markdown: string,
+  task: ParsedMarkdownTask,
+  updater: (task: ParsedMarkdownTask) => ParsedMarkdownTask
+): string {
+  const updatedTask = updater(task);
+  return `${markdown.slice(0, task.startIndex)}${markdownTaskLineFromParsed(updatedTask, updatedTask.checked)}${markdown.slice(task.endIndex)}`;
+}
+
+export function updateMarkdownTaskText(
+  markdown: string,
+  task: TaskRow,
+  tasks: TaskRow[],
+  path: string,
+  value: string
+): string {
+  const located = locateMarkdownTask(markdown, task, tasks);
+  if (!located) {
+    throw new Error("Markdown task could not be found in the source file.");
+  }
+  return replaceMarkdownTask(markdown, located, (parsed) => updateParsedMarkdownTask(parsed, path, value));
+}
+
+export function deleteMarkdownTaskText(markdown: string, task: TaskRow, tasks: TaskRow[] = [task]): string {
+  const located = locateMarkdownTask(markdown, task, tasks);
+  if (!located) {
+    throw new Error("Markdown task could not be found in the source file.");
+  }
+  return `${markdown.slice(0, located.startIndex)}${markdown.slice(located.endIndex)}`;
 }

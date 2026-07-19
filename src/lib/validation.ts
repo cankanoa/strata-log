@@ -11,6 +11,7 @@ import {
   getSessionMetadataFieldDefinitions,
   getMetadataFields,
   hasMetadataValue,
+  internalTaskColumnTypeOptions,
   isBuiltinField,
   metadataValueMatchesOption,
 } from "@/lib/metadata";
@@ -21,13 +22,21 @@ import {
   getSelectableFieldOptions,
   resolveAttributeReferenceMetadata
 } from "@/lib/attribute-references";
-import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, MetadataValue, OnlineAccount, SessionMetadata, SessionPreset, TaskRow, TaskSource, TimeInterval, TimeLogFile } from "@/lib/types";
+import {
+  INTERNAL_TASK_BODY_COLUMN_NAME,
+  INTERNAL_TASK_TITLE_COLUMN_NAME,
+  normalizeInternalTaskColumns,
+  normalizeInternalTaskSources
+} from "@/lib/internal-tasks";
+import { defaultGeneralSettings } from "@/lib/defaults";
+import type { ActiveTaskReference, AttributeReferenceGroup, EntryInterval, FieldDefinition, GeneralSettings, InternalTaskRow, MetadataValue, OnlineAccount, SessionMetadata, SessionPreset, TaskFieldMetadata, TaskRow, TaskSource, TimeInterval, TimeLogFile } from "@/lib/types";
 
 const fieldTypeSchema = z.enum([
   "uuid",
   "string",
+  "markdown",
   "path",
-  "markdown_glob",
+  "file_search",
   "filter_task_sources",
   "attribute_reference",
   "datetime",
@@ -80,21 +89,26 @@ const sessionPresetSchema: z.ZodType<SessionPreset> = z.object({
 
 const taskSourceSchema: z.ZodType<TaskSource> = z.object({
   id: z.string().uuid(),
-  type: z.enum(["Markdown", "Github"]),
+  type: z.enum(["Markdown", "Github", "Internal Task"]),
   url: z.string(),
   name: z.string().optional(),
-  accountId: z.string().uuid().optional()
+  accountId: z.string().uuid().optional(),
+  columnNames: z.array(z.string()).optional(),
+  lastUpdatedAt: z.string().optional()
 });
 
 const taskRowSchema: z.ZodType<TaskRow> = z.object({
   id: z.string().uuid(),
   sourceId: z.string().uuid(),
   parentTaskId: z.string().uuid().optional(),
-  type: z.enum(["Markdown", "Github"]),
+  type: z.enum(["Markdown", "Github", "Internal Task"]),
   url: z.string(),
   contents: z.string(),
-  status: z.enum(["completed"]).optional(),
+  status: z.boolean().optional(),
   rank: z.string(),
+  hash: z.string().optional(),
+  byteLength: z.number().int().nonnegative().optional(),
+  updatedAt: z.string().optional(),
   data: z.record(z.unknown())
 });
 
@@ -104,6 +118,33 @@ const onlineAccountSchema: z.ZodType<OnlineAccount> = z.object({
   name: z.string(),
   username: z.string().optional(),
   token: z.string().optional()
+});
+
+const internalTaskRowSchema: z.ZodType<InternalTaskRow> = z.object({
+  id: z.string().uuid(),
+  taskSourceId: z.string().uuid(),
+  values: z.record(metadataValueSchema)
+});
+
+const activeTaskReferenceSchema: z.ZodType<ActiveTaskReference> = z.object({
+  taskId: z.string().uuid(),
+  table: z.enum(["tasks", "tasks_internal"])
+});
+
+const taskFieldMetadataSchema: z.ZodType<TaskFieldMetadata> = z.object({
+  sourceId: z.string().uuid().optional(),
+  path: z.string(),
+  label: z.string(),
+  type: z.enum(["string", "markdown", "number", "bool", "datetime", "select", "multiselect"]),
+  editable: z.boolean(),
+  options: z.array(z.string()).optional(),
+  fieldId: z.union([z.string(), z.number()]).optional(),
+  updateKind: z.enum(["github_issue", "github_issue_field", "markdown_field"]).optional()
+});
+
+const generalSettingsSchema: z.ZodType<GeneralSettings> = z.object({
+  refreshRateSeconds: z.number().min(0),
+  taskFieldMetadata: z.record(z.array(taskFieldMetadataSchema))
 });
 
 const timeLogSchema: z.ZodType<TimeLogFile> = z.object({
@@ -116,8 +157,12 @@ const timeLogSchema: z.ZodType<TimeLogFile> = z.object({
   sessionPresets: z.array(sessionPresetSchema),
   taskSources: z.array(taskSourceSchema),
   tasks: z.array(taskRowSchema),
+  internalTaskColumns: z.record(fieldDefinitionSchema),
+  internalTasks: z.array(internalTaskRowSchema),
+  activeTasks: z.array(activeTaskReferenceSchema),
   accounts: z.array(onlineAccountSchema),
-  entries: z.array(entrySchema)
+  entries: z.array(entrySchema),
+  settings: generalSettingsSchema.optional()
 });
 
 function validateFieldValue(name: string, field: FieldDefinition, value: MetadataValue | null | undefined): string | null {
@@ -158,16 +203,11 @@ function validateFieldValue(name: string, field: FieldDefinition, value: Metadat
     case "float":
       return typeof value === "number" ? null : `"${name}" must be a number.`;
     case "string":
+    case "markdown":
     case "path":
+    case "file_search":
     case "filter_task_sources":
       return typeof value === "string" ? null : `"${name}" must be a string.`;
-    case "markdown_glob":
-      if (typeof value !== "string") {
-        return `"${name}" must be a string.`;
-      }
-      return /\.md(?:$|[\\/[*?{])/i.test(value)
-        ? null
-        : `"${name}" must be a markdown glob pattern ending in .md.`;
     case "attribute_reference":
       return typeof value === "string" ? null : `"${name}" must reference an attribute option.`;
     case "datetime": {
@@ -193,6 +233,9 @@ export function validateFieldDefinitions(fields: Record<string, FieldDefinition>
       return;
     }
     if (field.type === "bool" && getFieldSelection(field) !== "single") {
+      errors.push(`Field "${key}" must use single selection value.`);
+    }
+    if (field.type === "markdown" && getFieldSelection(field) !== "single") {
       errors.push(`Field "${key}" must use single selection value.`);
     }
     if (field.type === "attribute_reference" && !["select", "multiselect"].includes(getFieldSelection(field))) {
@@ -274,6 +317,9 @@ function validateAttributeReferenceGroups(
       if (field.type === "bool" && getFieldSelection(field) !== "single") {
         errors.push(`Attribute reference field "${group.label}.${key}" must use single selection value.`);
       }
+      if (field.type === "markdown" && getFieldSelection(field) !== "single") {
+        errors.push(`Attribute reference field "${group.label}.${key}" must use single selection value.`);
+      }
       if (field.type === "attribute_reference" && !["select", "multiselect"].includes(getFieldSelection(field))) {
         errors.push(`Attribute reference field "${group.label}.${key}" must use select or multiselect selection value.`);
       }
@@ -310,6 +356,132 @@ function validateAttributeReferenceGroups(
   });
 
   return errors;
+}
+
+function validateInternalTaskColumns(columns: Record<string, FieldDefinition>): string[] {
+  const errors: string[] = [];
+  const title = columns[INTERNAL_TASK_TITLE_COLUMN_NAME];
+  const body = columns[INTERNAL_TASK_BODY_COLUMN_NAME];
+  if (!title) {
+    errors.push(`Internal task column "${INTERNAL_TASK_TITLE_COLUMN_NAME}" is required.`);
+  } else {
+    if (title.type !== "string") {
+      errors.push(`Internal task column "${INTERNAL_TASK_TITLE_COLUMN_NAME}" must use string type.`);
+    }
+    if (getFieldSelection(title) !== "single") {
+      errors.push(`Internal task column "${INTERNAL_TASK_TITLE_COLUMN_NAME}" must use single selection value.`);
+    }
+    if (!title.required) {
+      errors.push(`Internal task column "${INTERNAL_TASK_TITLE_COLUMN_NAME}" must be required.`);
+    }
+  }
+  if (!body) {
+    errors.push(`Internal task column "${INTERNAL_TASK_BODY_COLUMN_NAME}" is required.`);
+  } else {
+    if (body.type !== "markdown") {
+      errors.push(`Internal task column "${INTERNAL_TASK_BODY_COLUMN_NAME}" must use markdown type.`);
+    }
+    if (getFieldSelection(body) !== "single") {
+      errors.push(`Internal task column "${INTERNAL_TASK_BODY_COLUMN_NAME}" must use single selection value.`);
+    }
+  }
+
+  return [
+    ...errors,
+    ...Object.entries(columns).flatMap(([key, field]) => {
+    const errors: string[] = [];
+    const parsed = fieldDefinitionSchema.safeParse(field);
+    if (!parsed.success) {
+      return [`Internal task column "${key}" is invalid.`];
+    }
+    if (key === "task_source_id") {
+      errors.push(`"task_source_id" is reserved for internal task rows.`);
+    }
+    if (!internalTaskColumnTypeOptions.includes(field.type)) {
+      errors.push(`Internal task column "${key}" must use a basic type.`);
+    }
+    if (field.type === "bool" && getFieldSelection(field) !== "single") {
+      errors.push(`Internal task column "${key}" must use single selection value.`);
+    }
+    if (field.type === "markdown" && getFieldSelection(field) !== "single") {
+      errors.push(`Internal task column "${key}" must use single selection value.`);
+    }
+    if (field.default !== undefined && field.default !== null) {
+      const defaultError = validateFieldValue(`${key} default`, field, field.default);
+      if (defaultError) {
+        errors.push(defaultError);
+      }
+    }
+    return errors;
+    })
+  ];
+}
+
+function validateTaskSources(file: TimeLogFile): string[] {
+  const errors: string[] = [];
+  const columnNames = new Set(Object.keys(file.internalTaskColumns));
+  file.taskSources.forEach((source) => {
+    if (source.type !== "Internal Task") {
+      return;
+    }
+    (source.columnNames ?? []).forEach((columnName) => {
+      if (!columnNames.has(columnName)) {
+        errors.push(`Task source "${source.name || source.url}" references unknown internal task column "${columnName}".`);
+      }
+    });
+  });
+  return errors;
+}
+
+function validateInternalTasks(file: TimeLogFile): string[] {
+  const sources = new Map(file.taskSources.map((source) => [source.id, source]));
+  return file.internalTasks.flatMap((task) => {
+    const errors: string[] = [];
+    const source = sources.get(task.taskSourceId);
+    if (!source || source.type !== "Internal Task") {
+      errors.push(`Internal task "${task.id}" references an unknown internal task source.`);
+      return errors;
+    }
+
+    const allowedColumns = new Set(source.columnNames ?? []);
+    Object.entries(task.values).forEach(([key, value]) => {
+      const field = file.internalTaskColumns[key];
+      if (!field) {
+        errors.push(`Internal task "${task.id}" uses unknown column "${key}".`);
+        return;
+      }
+      if (!allowedColumns.has(key)) {
+        errors.push(`Internal task "${task.id}" uses column "${key}" outside its task source.`);
+        return;
+      }
+      const valueError = validateFieldValue(key, field, value);
+      if (valueError) {
+        errors.push(valueError);
+      }
+    });
+
+    allowedColumns.forEach((key) => {
+      const field = file.internalTaskColumns[key];
+      if (field?.required && !hasMetadataValue(task.values[key] ?? field.default ?? undefined)) {
+        errors.push(`Internal task "${task.id}" requires "${key}".`);
+      }
+    });
+    return errors;
+  });
+}
+
+function normalizeActiveTasks(file: TimeLogFile): ActiveTaskReference[] {
+  const importedTaskIds = new Set(file.tasks.map((task) => task.id));
+  const seen = new Set<string>();
+  return file.activeTasks.filter((reference) => {
+    const valid = reference.table === "tasks" && importedTaskIds.has(reference.taskId);
+    const key = `${reference.table}:${reference.taskId}`;
+    if (!valid || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 export function validateMetadataPayload(
@@ -408,12 +580,22 @@ export function validateFile(input: unknown): { file: TimeLogFile | null; errors
 
   const file: TimeLogFile = {
     ...parsed.data,
-    fields: ensureBuiltinFields(parsed.data.fields)
+    fields: ensureBuiltinFields(parsed.data.fields),
+    internalTaskColumns: normalizeInternalTaskColumns(parsed.data.internalTaskColumns),
+    taskSources: normalizeInternalTaskSources(
+      parsed.data.taskSources,
+      normalizeInternalTaskColumns(parsed.data.internalTaskColumns)
+    ),
+    activeTasks: normalizeActiveTasks(parsed.data),
+    settings: parsed.data.settings ?? defaultGeneralSettings
   };
 
   const errors = [
     ...validateFieldDefinitions(file.fields),
     ...validateAttributeReferenceGroups(file.fields, file.attributeReferenceGroups),
+    ...validateInternalTaskColumns(file.internalTaskColumns),
+    ...validateTaskSources(file),
+    ...validateInternalTasks(file),
     ...file.entries.flatMap((entry) => [
       ...validateIntervals(entry),
       ...validateEntryMetadata(file, entry)

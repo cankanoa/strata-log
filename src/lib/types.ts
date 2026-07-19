@@ -1,8 +1,9 @@
 export type FieldType =
   | "uuid"
   | "string"
+  | "markdown"
   | "path"
-  | "markdown_glob"
+  | "file_search"
   | "filter_task_sources"
   | "attribute_reference"
   | "datetime"
@@ -22,7 +23,8 @@ export type SessionPreset = {
   metadata: SessionMetadata;
 };
 
-export type TaskSourceType = "Markdown" | "Github";
+export type TaskSourceType = "Markdown" | "Github" | "Internal Task";
+export type ImportedTaskSourceType = Exclude<TaskSourceType, "Internal Task">;
 
 export type TaskSource = {
   id: string;
@@ -30,9 +32,12 @@ export type TaskSource = {
   url: string;
   name?: string;
   accountId?: string;
+  columnNames?: string[];
+  lastUpdatedAt?: string;
 };
 
-export type TaskRowStatus = "completed" | undefined;
+export type TaskRowStatus = boolean | undefined;
+export type TaskTableName = "tasks" | "tasks_internal";
 
 export type TaskRow = {
   id: string;
@@ -43,7 +48,42 @@ export type TaskRow = {
   contents: string;
   status?: TaskRowStatus;
   rank: string;
+  hash?: string;
+  byteLength?: number;
+  updatedAt?: string;
   data: Record<string, unknown>;
+};
+
+export type TaskDisplayRow = {
+  id: string;
+  sourceId: string;
+  parentTaskId?: string;
+  taskTable: TaskTableName;
+  type: TaskSourceType;
+  url: string;
+  contents: string;
+  status?: TaskRowStatus;
+  rank: string;
+  hash?: string;
+  byteLength?: number;
+  updatedAt?: string;
+  data: Record<string, unknown>;
+};
+
+export type TaskFieldMetadata = {
+  sourceId?: string;
+  path: string;
+  label: string;
+  type: "string" | "markdown" | "number" | "bool" | "datetime" | "select" | "multiselect";
+  editable: boolean;
+  options?: string[];
+  fieldId?: string | number;
+  updateKind?: "github_issue" | "github_issue_field" | "markdown_field";
+};
+
+export type GeneralSettings = {
+  refreshRateSeconds: number;
+  taskFieldMetadata: Record<string, TaskFieldMetadata[]>;
 };
 
 export type OnlineAccountType = "Github";
@@ -54,6 +94,17 @@ export type OnlineAccount = {
   name: string;
   username?: string;
   token?: string;
+};
+
+export type InternalTaskRow = {
+  id: string;
+  taskSourceId: string;
+  values: SessionMetadata;
+};
+
+export type ActiveTaskReference = {
+  taskId: string;
+  table: TaskTableName;
 };
 
 export type FieldDefinition = {
@@ -93,8 +144,12 @@ export type TimeLogFile = {
   sessionPresets: SessionPreset[];
   taskSources: TaskSource[];
   tasks: TaskRow[];
+  internalTaskColumns: Record<string, FieldDefinition>;
+  internalTasks: InternalTaskRow[];
+  activeTasks: ActiveTaskReference[];
   accounts: OnlineAccount[];
   entries: EntryInterval[];
+  settings?: GeneralSettings;
 };
 
 export type MetadataFilter = {
@@ -129,12 +184,4 @@ export type AppSnapshot = {
   fileHandle: FileHandleInfo | null;
   hasUnsavedChanges: boolean;
   conflict: ConflictState;
-};
-
-export type TaskItem = {
-  id: string;
-  kind: string;
-  title: string;
-  path: string;
-  sourceLabel: string;
 };

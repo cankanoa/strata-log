@@ -1,13 +1,28 @@
-import { BUILTIN_FIELD_DEFINITIONS } from "@/lib/metadata";
 import type { TimeLogFile } from "@/lib/types";
 import { parseTimeLogYaml } from "@/lib/yaml";
-import defaultTemplateRaw from "../../templates/default.csdb?raw";
+import blankTemplateRaw from "../../templates/blank.csdb?raw";
+import officeWorkerTemplateRaw from "../../templates/office-worker.csdb?raw";
+import paidClientWorkTemplateRaw from "../../templates/paid-client-work.csdb?raw";
+import simplePersonalTodoTemplateRaw from "../../templates/simple-personal-todo.csdb?raw";
+import softwareDeveloperTemplateRaw from "../../templates/software-developer.csdb?raw";
 
-const templateModules = import.meta.glob("/templates/*.csdb", {
-  query: "?raw",
-  import: "default",
-  eager: true
-}) as Record<string, string>;
+export const TEMPLATE_OPTIONS = [
+  { id: "blank", name: "Blank" },
+  { id: "simple-personal-todo", name: "Simple Personal Todo" },
+  { id: "office-worker", name: "Office Worker" },
+  { id: "paid-client-work", name: "Paid Client Work" },
+  { id: "software-developer", name: "Software Developer" }
+] as const;
+
+type TemplateId = typeof TEMPLATE_OPTIONS[number]["id"];
+
+const templateModules: Record<TemplateId, string> = {
+  blank: blankTemplateRaw,
+  "office-worker": officeWorkerTemplateRaw,
+  "paid-client-work": paidClientWorkTemplateRaw,
+  "simple-personal-todo": simplePersonalTodoTemplateRaw,
+  "software-developer": softwareDeveloperTemplateRaw
+};
 
 export type TemplateDefinition = {
   id: string;
@@ -15,89 +30,21 @@ export type TemplateDefinition = {
   content: TimeLogFile;
 };
 
-function createFallbackDefaultTemplate(): TimeLogFile {
-  return {
-    version: 1,
-    fields: {
-      ...BUILTIN_FIELD_DEFINITIONS,
-      Project: {
-        type: "string",
-        selection: "single",
-        required: false,
-        visibility: "editable",
-        default: null
-      },
-      "Hourly Pay": {
-        type: "string",
-        selection: "single",
-        required: false,
-        visibility: "editable",
-        default: null
-      },
-      Job: {
-        type: "string",
-        selection: "select",
-        options: ["[Client Work]Client Work", "[Internal]Internal", "[Admin]Admin"],
-        required: false,
-        visibility: "editable",
-        default: null
-      },
-      Activity: {
-        type: "string",
-        selection: "single",
-        required: false,
-        visibility: "editable",
-        default: null
-      }
-    },
-    attributeReferenceGroups: [],
-    sessionPresets: [],
-    taskSources: [],
-    tasks: [],
-    accounts: [],
-    entries: []
-  };
-}
-
-function buildGuaranteedDefaultTemplate(): TemplateDefinition {
-  const parsed = parseTimeLogYaml(defaultTemplateRaw);
-  return {
-    id: "default",
-    name: "Default",
-    content: parsed.file ?? createFallbackDefaultTemplate()
-  };
+function buildTemplate(option: typeof TEMPLATE_OPTIONS[number]): TemplateDefinition | null {
+  const parsed = parseTimeLogYaml(templateModules[option.id]);
+  const content = parsed.file;
+  return content ? { ...option, content } : null;
 }
 
 export const TemplateService = {
   listTemplates(): TemplateDefinition[] {
-    const guaranteedDefault = buildGuaranteedDefaultTemplate();
-    const templates = Object.entries(templateModules).flatMap(([path, raw]) => {
-      const id = path.split("/").pop()?.replace(/\.csdb$/, "") ?? "template";
-      const parsed = parseTimeLogYaml(raw);
-      if (!parsed.file) {
-        return [];
-      }
-      return [{
-        id,
-        name: id.replace(/[-_]/g, " ").replace(/\b\w/g, (value) => value.toUpperCase()),
-        content: parsed.file
-      }];
-    });
-    const uniqueTemplates = new Map<string, TemplateDefinition>([[guaranteedDefault.id, guaranteedDefault]]);
-    templates.forEach((template) => {
-      uniqueTemplates.set(template.id, template);
-    });
-    return Array.from(uniqueTemplates.values()).sort((left, right) => {
-      const order = ["blank", "default"];
-      const leftIndex = order.indexOf(left.id);
-      const rightIndex = order.indexOf(right.id);
-      if (leftIndex !== -1 || rightIndex !== -1) {
-        return (leftIndex === -1 ? order.length : leftIndex) - (rightIndex === -1 ? order.length : rightIndex);
-      }
-      return left.name.localeCompare(right.name);
+    return TEMPLATE_OPTIONS.flatMap((option) => {
+      const template = buildTemplate(option);
+      return template ? [template] : [];
     });
   },
   getTemplate(id: string): TemplateDefinition | undefined {
-    return this.listTemplates().find((template) => template.id === id);
+    const option = TEMPLATE_OPTIONS.find((template) => template.id === id);
+    return option ? buildTemplate(option) ?? undefined : undefined;
   }
 };

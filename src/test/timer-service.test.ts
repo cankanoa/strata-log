@@ -23,6 +23,9 @@ const baseFile: TimeLogFile = {
   sessionPresets: [],
   taskSources: [],
   tasks: [],
+  internalTaskColumns: {},
+  internalTasks: [],
+  activeTasks: [],
   accounts: [],
   entries: []
 };
@@ -83,13 +86,33 @@ describe("CSDB services", () => {
     };
 
     const raw = serializeTimeLogYaml(file);
-    expect(raw).toContain("--- table:sessions:data");
-    expect(raw).toContain("--- table:intervals:data");
-    expect(raw).toContain("--- table:metadata:data");
+    expect(raw).toContain("--- table:track_sessions:data");
+    expect(raw).toContain("--- table:track_intervals:data");
+    expect(raw).toContain("--- table:track_metadata:data");
     const parsed = parseTimeLogYaml(raw);
     expect(parsed.errors).toEqual([]);
     expect(parsed.file?.entries[0]?.metadata).toEqual({ Project: "Strata" });
     expect(parsed.file?.entries[0]?.intervals?.[0]?.metadata).toEqual({});
+  });
+
+  it("accepts generic file search glob values", () => {
+    const validation = validateFile({
+      ...baseFile,
+      fields: {
+        ...baseFile.fields,
+        Files: { type: "file_search", selection: "single", visibility: "editable" }
+      },
+      entries: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440000",
+          metadata: { Files: "**/*.{md,png,json}" },
+          intervals: []
+        }
+      ]
+    });
+
+    expect(validation.errors).toEqual([]);
+    expect(validation.file?.entries[0]?.metadata?.Files).toBe("**/*.{md,png,json}");
   });
 
   it("round-trips task uuids and parent task ids", () => {
@@ -126,7 +149,7 @@ describe("CSDB services", () => {
     };
 
     const raw = serializeTimeLogYaml(file);
-    expect(raw).toContain("uuid,source_id,parent_task_id,type,url,contents,status,rank,data_json");
+    expect(raw).toContain("uuid,source_id,parent_task_id,type,url,contents,status,rank,hash,byte_length,updated_at,data_json");
     const parsed = parseTimeLogYaml(raw);
 
     expect(parsed.errors).toEqual([]);
@@ -166,12 +189,160 @@ describe("CSDB services", () => {
     };
 
     const raw = serializeTimeLogYaml(file);
-    expect(raw).toContain("id,name,type,url,account_id");
+    expect(raw).toContain("id,name,type,url,account_id,column_names_json");
     const parsed = parseTimeLogYaml(raw);
 
     expect(parsed.errors).toEqual([]);
     expect(parsed.file?.taskSources[0]?.name).toBe("Product Backlog");
     expect(parsed.file?.entries[0]?.metadata?.Source).toBe("**/*.md");
+  });
+
+  it("round-trips general settings", () => {
+    const file: TimeLogFile = {
+      ...baseFile,
+      settings: {
+        refreshRateSeconds: 45,
+        taskFieldMetadata: {
+          "550e8400-e29b-41d4-a716-446655440100": [
+            {
+              sourceId: "550e8400-e29b-41d4-a716-446655440100",
+              path: "state",
+              label: "State",
+              type: "select",
+              editable: true,
+              options: ["open", "closed"],
+              updateKind: "github_issue"
+            },
+            {
+              sourceId: "550e8400-e29b-41d4-a716-446655440100",
+              path: "body",
+              label: "Body",
+              type: "markdown",
+              editable: true,
+              updateKind: "github_issue"
+            }
+          ]
+        }
+      }
+    };
+
+    const raw = serializeTimeLogYaml(file);
+    expect(raw).toContain("--- table:settings:data");
+    expect(raw).toContain("refresh_rate_seconds,45");
+    const parsed = parseTimeLogYaml(raw);
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.file?.settings?.refreshRateSeconds).toBe(45);
+    expect(parsed.file?.settings?.taskFieldMetadata["550e8400-e29b-41d4-a716-446655440100"]?.[0]?.path).toBe("state");
+    expect(parsed.file?.settings?.taskFieldMetadata["550e8400-e29b-41d4-a716-446655440100"]?.[1]?.type).toBe("markdown");
+  });
+
+  it("round-trips active tasks", () => {
+    const sourceId = "550e8400-e29b-41d4-a716-446655440100";
+    const taskId = "550e8400-e29b-41d4-a716-446655440101";
+    const file: TimeLogFile = {
+      ...baseFile,
+      taskSources: [
+        {
+          id: sourceId,
+          type: "Markdown",
+          url: "**/*.md"
+        }
+      ],
+      tasks: [
+        {
+          id: taskId,
+          sourceId,
+          type: "Markdown",
+          url: "/notes/today.md:0|hzzzzz:",
+          contents: "Write spec",
+          rank: "0|hzzzzz:",
+          data: { title: "Write spec" }
+        }
+      ],
+      activeTasks: [{ taskId, table: "tasks" }]
+    };
+
+    const raw = serializeTimeLogYaml(file);
+    expect(raw).not.toContain("--- table:task_settings:data");
+    expect(raw).toContain("--- table:tasks_active:data");
+    const parsed = parseTimeLogYaml(raw);
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.file?.activeTasks).toEqual([{ taskId, table: "tasks" }]);
+  });
+
+  it("round-trips internal task sources, columns, and rows", () => {
+    const sourceId = "550e8400-e29b-41d4-a716-446655440100";
+    const file: TimeLogFile = {
+      ...baseFile,
+      taskSources: [
+        {
+          id: sourceId,
+          name: "Backlog",
+          type: "Internal Task",
+          url: `internal-task:${sourceId}`,
+          columnNames: ["title", "Priority"]
+        }
+      ],
+      internalTaskColumns: {
+        title: { type: "string", selection: "single", visibility: "editable", required: true },
+        Priority: { type: "string", selection: "select", visibility: "editable", options: ["Low", "High"] }
+      },
+      internalTasks: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440101",
+          taskSourceId: sourceId,
+          values: { title: "Write spec", Priority: "High" }
+        }
+      ]
+    };
+
+    const raw = serializeTimeLogYaml(file);
+    expect(raw).toContain("--- table:task_internal_columns:data");
+    expect(raw).toContain("--- table:tasks_internal:data");
+    expect(raw).toContain("task_source_id");
+    const parsed = parseTimeLogYaml(raw);
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.file?.taskSources[0]?.type).toBe("Internal Task");
+    expect(parsed.file?.taskSources[0]?.columnNames).toEqual(["title", "status", "body", "Priority"]);
+    expect(parsed.file?.tasks[0]?.url).toBe("550e8400-e29b-41d4-a716-446655440101");
+    expect(parsed.file?.internalTasks[0]?.taskSourceId).toBe(sourceId);
+    expect(parsed.file?.internalTasks[0]?.values).toEqual({ title: "Write spec", status: true, Priority: "High" });
+  });
+
+  it("prunes internal task values when columns are removed", () => {
+    const sourceId = "550e8400-e29b-41d4-a716-446655440100";
+    const file: TimeLogFile = {
+      ...baseFile,
+      taskSources: [
+        {
+          id: sourceId,
+          type: "Internal Task",
+          url: `internal-task:${sourceId}`,
+          columnNames: ["title", "Hidden"]
+        }
+      ],
+      internalTaskColumns: {
+        title: { type: "string", selection: "single", visibility: "editable" },
+        Hidden: { type: "string", selection: "single", visibility: "editable" }
+      },
+      internalTasks: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440101",
+          taskSourceId: sourceId,
+          values: { title: "Keep", Hidden: "Remove" }
+        }
+      ]
+    };
+
+    const next = TimeLogDatabase.setInternalTaskColumns(file, {
+      title: file.internalTaskColumns.title!
+    });
+
+    expect(next.taskSources[0]?.columnNames).toEqual(["title", "status", "body"]);
+    expect(next.internalTasks[0]?.values).toEqual({ title: "Keep", status: true });
   });
 
   it("rejects unknown task source filter values", () => {
@@ -224,7 +395,7 @@ describe("CSDB services", () => {
     };
 
     const raw = serializeTimeLogYaml(file);
-    expect(raw).toContain("--- table:session_presets:data");
+    expect(raw).toContain("--- table:track_session_presets:data");
     const parsed = parseTimeLogYaml(raw);
 
     expect(parsed.errors).toEqual([]);
