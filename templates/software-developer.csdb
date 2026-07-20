@@ -216,7 +216,7 @@ name: tasks
 columns:
   uuid: text
   source_id: text
-  parent_task_id: text
+  parent_url: text
   type: text
   url: text
   contents: text
@@ -236,7 +236,7 @@ required:
   - data_json
 primary_key:
   columns:
-    - uuid
+    - url
 defaults: {}
 unique: []
 foreign_keys: []
@@ -246,7 +246,7 @@ computed_fields: {}
 comments: {}
 
 --- table:tasks:data
-uuid,source_id,parent_task_id,type,url,contents,status,rank,hash,byte_length,updated_at,data_json
+uuid,source_id,parent_url,type,url,contents,status,rank,hash,byte_length,updated_at,data_json
 
 --- table:task_internal_columns:schema
 name: task_internal_columns

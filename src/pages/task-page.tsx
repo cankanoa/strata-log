@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SyncButton } from "@/components/ui/sync-button";
+import { ChooseTaskItem, type TaskItemTypeFilter } from "@/components/task/choose-task-item";
 import { MarkdownValueDialog } from "@/components/forms/markdown-value-dialog";
 import { MetadataValueDialog } from "@/features/database/metadata-value-dialog";
 import {
@@ -38,7 +39,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { getFieldSelection } from "@/lib/metadata";
 import { INTERNAL_TASK_BODY_COLUMN_NAME, INTERNAL_TASK_STATUS_COLUMN_NAME, INTERNAL_TASK_TITLE_COLUMN_NAME } from "@/lib/internal-tasks";
 import { taskDisplayRows, taskReferenceKey, taskSourceCreationGroups, taskSourceLabelForTask, type TaskSourceChoice } from "@/lib/task-query";
-import { filterTaskDisplayRowsBySourceUrls, getTrackTaskSourceFilterUrls } from "@/lib/task-source-filters";
+import { filterTaskDisplayRowsBySourceUrls, filterTaskSourceChoiceGroupsBySourceUrls, getTrackTaskSourceFilterUrls } from "@/lib/task-source-filters";
+import { extractMarkdownFieldsFromData } from "@/lib/markdown-task-identity";
 import type { ActiveTaskReference, FieldDefinition, MetadataValue, TaskDisplayRow, TaskFieldMetadata, TaskSource } from "@/lib/types";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
@@ -107,6 +109,31 @@ type TaskRowGroup = {
 const UNSET_GROUP_SELECT_VALUE = "__unset__";
 const UNSET_GROUP_KEY = "__unset__";
 const ALL_TASKS_GROUP_KEY = "__all_tasks__";
+const MARKDOWN_ADMIN_DATA_KEYS = new Set([
+  "__strata",
+  "checked",
+  "content",
+  "filePath",
+  "parentIssue",
+  "parentUrl",
+  "rank",
+  "status",
+  "title",
+  "url"
+]);
+const GITHUB_ISSUE_EDITABLE_PATHS = new Set([
+  "assignees",
+  "body",
+  "contents",
+  "labels",
+  "milestone",
+  "parentUrl",
+  "state",
+  "state_reason",
+  "status",
+  "title",
+  "type"
+]);
 
 function sortTasks(tasks: TaskDisplayRow[], sourcesById: Map<string, TaskSource>): TaskDisplayRow[] {
   return [...tasks].sort((left, right) => {
@@ -207,7 +234,7 @@ function taskColumns(
     { id: "source", title: "Source", type: "string", defaultVisible: true, value: (task, sourcesById) => taskSourceLabelForTask(sourcesById.get(task.sourceId), task) },
     { id: "url", title: "URL", type: "string", defaultVisible: true, value: (task) => task.url },
     { id: "uuid", title: "UUID", type: "string", defaultVisible: false, value: (task) => task.id },
-    { id: "parentTaskId", title: "Parent Task", type: "string", defaultVisible: false, value: (task) => task.parentTaskId },
+    { id: "parentUrl", title: "Parent URL", type: "string", defaultVisible: false, value: (task) => task.parentUrl },
     { id: "rank", title: "Rank", type: "string", defaultVisible: false, value: (task) => task.rank },
     { id: "hash", title: "Hash", type: "string", defaultVisible: false, value: (task) => task.hash },
     { id: "byteLength", title: "Byte Length", type: "number", defaultVisible: false, value: (task) => task.byteLength },
@@ -797,6 +824,60 @@ function statusFieldForSource(source: TaskSource): TaskFieldMetadata {
   };
 }
 
+function parentFieldForSource(source: TaskSource): TaskFieldMetadata {
+  return {
+    sourceId: source.id,
+    path: "parentUrl",
+    label: "Parent Task",
+    type: "string",
+    editable: true,
+    updateKind: source.type === "Github" ? "github_issue" : "markdown_field"
+  };
+}
+
+function parentFilterForSource(source: TaskSource | undefined): TaskItemTypeFilter[] | undefined {
+  if (!source) {
+    return undefined;
+  }
+  return source.type === "Github"
+    ? ["Github"]
+    : [source.type];
+}
+
+function parentFilterForTask(task: TaskDisplayRow): TaskItemTypeFilter[] {
+  const rawObjectType = task.data.__strata && typeof task.data.__strata === "object"
+    ? (task.data.__strata as { rawObjectType?: string }).rawObjectType
+    : undefined;
+  return rawObjectType === "github_checklist_task" ? ["Github", "Markdown via Github"] : [task.type];
+}
+
+function isGithubChecklistTask(task: TaskDisplayRow): boolean {
+  const rawObjectType = task.data.__strata && typeof task.data.__strata === "object"
+    ? (task.data.__strata as { rawObjectType?: string }).rawObjectType
+    : undefined;
+  return rawObjectType === "github_checklist_task";
+}
+
+function isGithubEditableField(field: TaskFieldMetadata): boolean {
+  return field.path === "parentUrl"
+    || (field.updateKind === "github_issue_field" && field.fieldId !== undefined)
+    || GITHUB_ISSUE_EDITABLE_PATHS.has(field.path);
+}
+
+function isMarkdownEditablePath(path: string, task?: TaskDisplayRow): boolean {
+  const dataPath = path.replace(/^data:/, "");
+  if (["contents", "parentUrl", "status", "title"].includes(dataPath)) {
+    return true;
+  }
+  if (MARKDOWN_ADMIN_DATA_KEYS.has(dataPath) || dataPath.startsWith("__strata.")) {
+    return false;
+  }
+  if (!task) {
+    return true;
+  }
+  return Object.hasOwn(extractMarkdownFieldsFromData(task.data), dataPath);
+}
+
 function TaskStatusSelect({
   disabled,
   task,
@@ -1072,16 +1153,16 @@ function buildTaskTreeRows(
   sourcesById: Map<string, TaskSource>,
   expandedIds: Set<string>
 ): { rows: TaskTreeRow[]; expandableIds: string[] } {
-  const tasksById = new Map(tasks.map((task) => [task.id, task]));
+  const tasksByUrl = new Map(tasks.map((task) => [task.url, task]));
   const childrenByParent = new Map<string, TaskDisplayRow[]>();
   tasks.forEach((task) => {
-    if (!task.parentTaskId || !tasksById.has(task.parentTaskId)) {
+    if (!task.parentUrl || !tasksByUrl.has(task.parentUrl)) {
       return;
     }
-    childrenByParent.set(task.parentTaskId, [...(childrenByParent.get(task.parentTaskId) ?? []), task]);
+    childrenByParent.set(task.parentUrl, [...(childrenByParent.get(task.parentUrl) ?? []), task]);
   });
 
-  const roots = sortTasks(tasks.filter((task) => !task.parentTaskId || !tasksById.has(task.parentTaskId)), sourcesById);
+  const roots = sortTasks(tasks.filter((task) => !task.parentUrl || !tasksByUrl.has(task.parentUrl)), sourcesById);
   const expandableIds = [...childrenByParent.entries()]
     .filter(([, children]) => children.length > 0)
     .map(([id]) => id);
@@ -1089,13 +1170,13 @@ function buildTaskTreeRows(
   const visited = new Set<string>();
 
   function append(task: TaskDisplayRow, depth: number) {
-    if (visited.has(task.id)) {
+    if (visited.has(task.url)) {
       return;
     }
-    visited.add(task.id);
-    const children = sortTasks(childrenByParent.get(task.id) ?? [], sourcesById);
+    visited.add(task.url);
+    const children = sortTasks(childrenByParent.get(task.url) ?? [], sourcesById);
     rows.push({ task, depth, children });
-    if (expandedIds.has(task.id)) {
+    if (expandedIds.has(task.url)) {
       children.forEach((child) => append(child, depth + 1));
     }
   }
@@ -1142,15 +1223,16 @@ export function TasksPage() {
     () => file ? getTrackTaskSourceFilterUrls(file, trackDraftMetadata) : new Set<string>(),
     [file, trackDraftMetadata]
   );
+  const allTasks = useMemo(() => file ? taskDisplayRows(file) : [], [file]);
   const tasks = useMemo(() => {
     if (!file) {
       return [];
     }
-    const rows = taskDisplayRows(file);
+    const rows = allTasks;
     return taskSourceFilterUrls.size > 0
       ? filterTaskDisplayRowsBySourceUrls(file, rows, taskSourceFilterUrls)
       : rows;
-  }, [file, taskSourceFilterUrls]);
+  }, [allTasks, file, taskSourceFilterUrls]);
   const sourcesById = useMemo(
     () => new Map((file?.taskSources ?? []).map((source) => [source.id, source])),
     [file?.taskSources]
@@ -1223,9 +1305,15 @@ export function TasksPage() {
   const isKanbanView = view === "small-kanban" || view === "large-kanban";
   const compactKanban = view === "small-kanban";
   const cellClassName = view === "large-table" ? "whitespace-nowrap px-4 py-3" : undefined;
-  const newTaskSourceGroups = useMemo(
+  const allNewTaskSourceGroups = useMemo(
     () => taskSourceCreationGroups(file?.taskSources ?? []),
     [file?.taskSources]
+  );
+  const newTaskSourceGroups = useMemo(
+    () => taskSourceFilterUrls.size > 0
+      ? filterTaskSourceChoiceGroupsBySourceUrls(allNewTaskSourceGroups, taskSourceFilterUrls)
+      : allNewTaskSourceGroups,
+    [allNewTaskSourceGroups, taskSourceFilterUrls]
   );
   const newTaskSourceOptions = useMemo(() => newTaskSourceGroups.flatMap((group) => group.choices), [newTaskSourceGroups]);
   const newTaskChoice = newTaskSourceOptions.find((choice) => choice.id === newTaskChoiceId) ?? newTaskSourceOptions[0];
@@ -1253,7 +1341,7 @@ export function TasksPage() {
 
   function editableFieldForSource(source: TaskSource | undefined, column: TaskTableColumn): TaskFieldMetadata | null {
     const path = editablePathForColumn(column);
-    if (!path || !source || ["source", "url", "uuid", "parentTaskId", "rank", "data"].includes(column.id)) {
+    if (!path || !source || ["source", "url", "uuid", "parentUrl", "rank", "data"].includes(column.id)) {
       return null;
     }
     if (path === "status") {
@@ -1264,7 +1352,10 @@ export function TasksPage() {
       ? { ...storedField, type: "markdown" as const }
       : storedField;
     if (source.type === "Github") {
-      return normalizedStoredField ?? (
+      if (normalizedStoredField) {
+        return isGithubEditableField(normalizedStoredField) ? normalizedStoredField : null;
+      }
+      return (
         path === "body"
           ? {
               sourceId: source.id,
@@ -1293,6 +1384,9 @@ export function TasksPage() {
         updateKind: "markdown_field"
       };
     }
+    if (!isMarkdownEditablePath(path)) {
+      return null;
+    }
     if (normalizedStoredField) {
       return normalizedStoredField;
     }
@@ -1307,7 +1401,28 @@ export function TasksPage() {
   }
 
   function editableFieldFor(task: TaskDisplayRow, column: TaskTableColumn): TaskFieldMetadata | null {
-    return editableFieldForSource(sourcesById.get(task.sourceId), column);
+    const source = sourcesById.get(task.sourceId);
+    const path = editablePathForColumn(column);
+    if (!path || !source) {
+      return null;
+    }
+    if (isGithubChecklistTask(task)) {
+      return isMarkdownEditablePath(path, task)
+        ? {
+            sourceId: source.id,
+            path,
+            label: path === "contents" ? "Title" : path.replace(/^data:/, ""),
+            type: path === "status" ? "bool" : "string",
+            editable: true,
+            options: path === "status" ? ["Open", "Closed"] : undefined,
+            updateKind: "github_issue"
+          }
+        : null;
+    }
+    if (source.type === "Markdown" && !isMarkdownEditablePath(path, task)) {
+      return null;
+    }
+    return editableFieldForSource(source, column);
   }
 
   function setNewTaskValue(path: string, value: MetadataValue) {
@@ -1412,6 +1527,18 @@ export function TasksPage() {
     if (column.id === "url") {
       return <span className="text-muted-foreground">Generated</span>;
     }
+    if (column.id === "parentUrl") {
+      return (
+        <ChooseTaskItem
+          disabled={!newTaskSource}
+          placeholder="Parent task"
+          tasks={allTasks}
+          typeFilter={parentFilterForSource(newTaskSource)}
+          value={typeof newTaskValues.parentUrl === "string" ? newTaskValues.parentUrl : undefined}
+          onChange={(value) => setNewTaskValue("parentUrl", value)}
+        />
+      );
+    }
     const editable = column.id === "status" && newTaskSource ? statusFieldForSource(newTaskSource) : editableFieldForSource(newTaskSource, column);
     return editable ? (
       <TaskDraftInput
@@ -1501,6 +1628,18 @@ export function TasksPage() {
         />
       );
     }
+    if (column.id === "parentUrl") {
+      const source = sourcesById.get(task.sourceId);
+      return source ? (
+        <ChooseTaskItem
+          excludeUrl={task.url}
+          tasks={allTasks}
+          typeFilter={parentFilterForTask(task)}
+          value={task.parentUrl}
+          onChange={(value) => void updateTaskField(task.id, parentFieldForSource(source), value)}
+        />
+      ) : <span className="text-muted-foreground">—</span>;
+    }
     return (
       <span className="inline-flex max-w-full items-center gap-1">
         {editable ? (
@@ -1527,10 +1666,10 @@ export function TasksPage() {
               type="button"
               variant="ghost"
               size="icon"
-              aria-label={expandedIds.has(task.id) ? "Collapse child tasks" : "Expand child tasks"}
-              onClick={() => toggleTask(task.id)}
+              aria-label={expandedIds.has(task.url) ? "Collapse child tasks" : "Expand child tasks"}
+              onClick={() => toggleTask(task.url)}
             >
-              {expandedIds.has(task.id) ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+              {expandedIds.has(task.url) ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
             </Button>
           ) : null}
         </TableCell>

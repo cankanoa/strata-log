@@ -158,7 +158,7 @@ describe("CSDB services", () => {
         {
           id: "550e8400-e29b-41d4-a716-446655440102",
           sourceId: "550e8400-e29b-41d4-a716-446655440100",
-          parentTaskId: "550e8400-e29b-41d4-a716-446655440101",
+          parentUrl: "/notes/today.md:0|hzzzzz:",
           type: "Markdown",
           url: "/notes/today.md:0|i00007:",
           contents: "Child",
@@ -169,11 +169,11 @@ describe("CSDB services", () => {
     };
 
     const raw = serializeTimeLogYaml(file);
-    expect(raw).toContain("uuid,source_id,parent_task_id,type,url,contents,status,rank,hash,byte_length,updated_at,data_json");
+    expect(raw).toContain("uuid,source_id,parent_url,type,url,contents,status,rank,hash,byte_length,updated_at,data_json");
     const parsed = parseTimeLogYaml(raw);
 
     expect(parsed.errors).toEqual([]);
-    expect(parsed.file?.tasks[1]?.parentTaskId).toBe(file.tasks[1]?.parentTaskId);
+    expect(parsed.file?.tasks[1]?.parentUrl).toBe(file.tasks[1]?.parentUrl);
     expect(parsed.file?.tasks[1]?.data).toEqual(file.tasks[1]?.data);
   });
 
@@ -327,7 +327,7 @@ describe("CSDB services", () => {
     expect(parsed.errors).toEqual([]);
     expect(parsed.file?.taskSources[0]?.type).toBe("Internal Task");
     expect(parsed.file?.taskSources[0]?.columnNames).toEqual(["title", "status", "body", "Priority"]);
-    expect(parsed.file?.tasks[0]?.url).toBe("550e8400-e29b-41d4-a716-446655440101");
+    expect(parsed.file?.tasks[0]?.url).toBe("internal:550e8400-e29b-41d4-a716-446655440101");
     expect(parsed.file?.internalTasks[0]?.taskSourceId).toBe(sourceId);
     expect(parsed.file?.internalTasks[0]?.values).toEqual({ title: "Write spec", status: true, Priority: "High" });
   });

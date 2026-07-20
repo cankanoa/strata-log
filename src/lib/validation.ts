@@ -101,7 +101,7 @@ const taskSourceSchema: z.ZodType<TaskSource> = z.object({
 const taskRowSchema: z.ZodType<TaskRow> = z.object({
   id: z.string().uuid(),
   sourceId: z.string().uuid(),
-  parentTaskId: z.string().uuid().optional(),
+  parentUrl: z.string().optional(),
   type: z.enum(["Markdown", "Github", "Internal Task"]),
   url: z.string(),
   contents: z.string(),

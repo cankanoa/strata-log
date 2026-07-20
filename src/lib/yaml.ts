@@ -162,7 +162,7 @@ const TASKS_TABLE: TableSchema = {
   columns: {
     uuid: "text",
     source_id: "text",
-    parent_task_id: "text",
+    parent_url: "text",
     type: "text",
     url: "text",
     contents: "text",
@@ -174,7 +174,7 @@ const TASKS_TABLE: TableSchema = {
     data_json: "text"
   },
   required: ["uuid", "source_id", "type", "url", "contents", "rank", "data_json"],
-  primary_key: { columns: ["uuid"] }
+  primary_key: { columns: ["url"] }
 };
 
 const SETTINGS_TABLE: TableSchema = {
@@ -540,7 +540,7 @@ function parseTasks(db: CSDBDatabase): TaskRow[] {
   return tableRows(db, "tasks").map((row) => ({
     id: asString(row.uuid),
     sourceId: asString(row.source_id),
-    parentTaskId: asString(row.parent_task_id) || undefined,
+    parentUrl: asString(row.parent_url) || undefined,
     type: asString(row.type) === "Github" ? "Github" : asString(row.type) === "Internal Task" ? "Internal Task" : "Markdown",
     url: asString(row.url),
     contents: asString(row.contents),
@@ -661,7 +661,8 @@ function normalizeFileForStorage(file: TimeLogFile): TimeLogFile {
       id: task.id,
       sourceId: task.taskSourceId,
       type: "Internal Task",
-      url: task.id,
+      parentUrl: typeof task.values.parentUrl === "string" && task.values.parentUrl.trim() ? task.values.parentUrl.trim() : undefined,
+      url: `internal:${task.id}`,
       contents: title,
       status,
       rank: existing?.rank ?? String(index).padStart(6, "0"),
@@ -723,7 +724,7 @@ export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
   const taskRows: Row[] = normalizedFile.tasks.map((task) => ({
     uuid: task.id,
     source_id: task.sourceId,
-    parent_task_id: task.parentTaskId ?? null,
+    parent_url: task.parentUrl ?? null,
     type: task.type,
     url: task.url,
     contents: task.contents,

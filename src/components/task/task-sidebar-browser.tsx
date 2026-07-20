@@ -71,7 +71,7 @@ function FileTreeNode({
         className={`flex h-7 w-full items-center gap-1.5 rounded-md pr-2 text-left text-sm transition-colors ${
           selected
             ? "bg-accent text-accent-foreground"
-            : "text-foreground/85 hover:bg-accent/70 hover:text-accent-foreground"
+            : "text-foreground/85 hover:bg-accent/90 hover:text-accent-foreground"
         }`}
         style={{ paddingLeft: `${depth * 12 + 4}px` }}
         onClick={() => {

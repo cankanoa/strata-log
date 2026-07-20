@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { taskDisplayRows } from "@/lib/task-query";
-import { filterTaskDisplayRowsBySourceUrls, getTrackTaskSourceFilterUrls } from "@/lib/task-source-filters";
+import { taskDisplayRows, taskSourceCreationGroups } from "@/lib/task-query";
+import { filterTaskDisplayRowsBySourceUrls, filterTaskSourceChoiceGroupsBySourceUrls, getTrackTaskSourceFilterUrls } from "@/lib/task-source-filters";
 import type { TaskRow, TaskSource, TimeLogFile } from "@/lib/types";
 
 const sources: TaskSource[] = [
@@ -92,5 +92,26 @@ describe("task source track filters", () => {
     };
 
     expect(filterTaskDisplayRowsBySourceUrls(ownerFile, taskDisplayRows(ownerFile), new Set(["acme/site"])).map((row) => row.contents)).toEqual(["site"]);
+  });
+
+  it("filters task creation source choices with the active track source filters", () => {
+    const ownerSource: TaskSource = {
+      id: "github-owner",
+      type: "Github",
+      url: "acme",
+      repositoryUrls: ["acme/api", "acme/site"]
+    };
+    const groups = taskSourceCreationGroups([ownerSource, sources[1]!, sources[2]!]);
+
+    const filtered = filterTaskSourceChoiceGroupsBySourceUrls(groups, new Set(["acme/site", sources[2]!.url]));
+
+    expect(filtered.map((group) => ({
+      label: group.label,
+      nested: group.nested,
+      choices: group.choices.map((choice) => choice.targetUrl ?? choice.source.url)
+    }))).toEqual([
+      { label: "acme", nested: true, choices: ["acme/site"] },
+      { label: "Internal Task", nested: false, choices: [sources[2]!.url] }
+    ]);
   });
 });

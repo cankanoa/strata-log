@@ -26,6 +26,7 @@ import {
   isGithubAuthError,
   syncMarkdownTaskSource,
   updateGithubTaskField,
+  updateMarkdownTaskParentText,
   updateMarkdownTaskText
 } from "@/lib/task-sync";
 import { githubSourceForRepository } from "@/lib/github-task-sources";
@@ -761,6 +762,9 @@ export const useAppStore = create<StoreState>((set, get) => ({
             ...input.values
           }).filter(([key]) => allowed.has(key))
         );
+        if (typeof input.values.parentUrl === "string" && input.values.parentUrl.trim()) {
+          values.parentUrl = input.values.parentUrl.trim();
+        }
         next = TimeLogDatabase.setInternalTasks(current, [
           ...current.internalTasks,
           { id, taskSourceId: source.id, values }
@@ -778,6 +782,10 @@ export const useAppStore = create<StoreState>((set, get) => ({
             title,
             status: input.values.status ?? true,
             ...input.values
+          }, {
+            parentUrl: typeof input.values.parentUrl === "string" ? input.values.parentUrl : undefined,
+            tasks: current.tasks.filter((candidate) => candidate.sourceId === source.id),
+            filePath: path
           })
         );
         next = await reloadTaskSource(current, source, handlePath);
@@ -884,7 +892,54 @@ export const useAppStore = create<StoreState>((set, get) => ({
       return false;
     }
     const updatedAt = new Date().toISOString();
+    const handlePath = get().fileHandle?.path;
     try {
+      if (field.path === "parentUrl") {
+        let next = current;
+        if (source.type === "Markdown") {
+          const filePath = typeof task.data.filePath === "string" ? task.data.filePath : task.url.replace(/:[^:]+$/, "");
+          const sourceTasks = current.tasks.filter((candidate) => candidate.sourceId === source.id);
+          await getPlatformApi().saveFile(
+            filePath,
+            updateMarkdownTaskParentText(
+              await getPlatformApi().readTextFile(filePath),
+              task,
+              sourceTasks,
+              typeof value === "string" && value.trim() ? value.trim() : undefined
+            )
+          );
+          next = await reloadTaskSource(current, source, handlePath);
+        } else if (source.type === "Github") {
+          const didUpdate = await updateGithubTaskField(
+            source,
+            task,
+            field,
+            value,
+            current.accounts.find((account) => account.id === source.accountId),
+            current.tasks.filter((candidate) => candidate.sourceId === source.id)
+          );
+          if (!didUpdate) {
+            throw new Error("This GitHub field cannot be edited from the app.");
+          }
+          next = await reloadTaskSource(current, source, handlePath);
+        } else {
+          next = TimeLogDatabase.setTaskFieldValue(current, taskId, field.path, value);
+        }
+        next = TimeLogDatabase.setTaskSources(
+          next,
+          next.taskSources.map((candidate) =>
+            candidate.id === source.id ? { ...candidate, lastUpdatedAt: updatedAt } : candidate
+          )
+        );
+        const validation = validateFile(next);
+        if (!validation.file) {
+          set({ errors: validation.errors });
+          return false;
+        }
+        set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
+        await get().saveCurrentFile();
+        return true;
+      }
       if (source.type === "Markdown") {
         const filePath = typeof task.data.filePath === "string" ? task.data.filePath : task.url.replace(/:[^:]+$/, "");
         const markdown = await getPlatformApi().readTextFile(filePath);
@@ -900,13 +955,17 @@ export const useAppStore = create<StoreState>((set, get) => ({
         );
       }
       if (source.type === "Github") {
-        await updateGithubTaskField(
+        const didUpdate = await updateGithubTaskField(
           source,
           task,
           field,
           value,
-          current.accounts.find((account) => account.id === source.accountId)
+          current.accounts.find((account) => account.id === source.accountId),
+          current.tasks.filter((candidate) => candidate.sourceId === source.id)
         );
+        if (!didUpdate) {
+          throw new Error("This GitHub field cannot be edited from the app.");
+        }
       }
       const withField = TimeLogDatabase.setTaskFieldValue(current, taskId, field.path, value);
       const next = TimeLogDatabase.setTaskSources(

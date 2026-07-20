@@ -43,7 +43,7 @@ export type TaskTableName = "tasks" | "tasks_internal";
 export type TaskRow = {
   id: string;
   sourceId: string;
-  parentTaskId?: string;
+  parentUrl?: string;
   type: TaskSourceType;
   url: string;
   contents: string;
@@ -58,7 +58,7 @@ export type TaskRow = {
 export type TaskDisplayRow = {
   id: string;
   sourceId: string;
-  parentTaskId?: string;
+  parentUrl?: string;
   taskTable: TaskTableName;
   type: TaskSourceType;
   url: string;

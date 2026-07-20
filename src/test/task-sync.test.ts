@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createMarkdownTaskText, deleteMarkdownTaskText, syncMarkdownTaskSource, updateMarkdownTaskText } from "@/lib/task-sync";
+import { createMarkdownTaskText, deleteMarkdownTaskText, syncMarkdownTaskSource, updateMarkdownTaskParentText, updateMarkdownTaskText } from "@/lib/task-sync";
 import type { TaskSource, TimeLogFile } from "@/lib/types";
 
 const source: TaskSource = {
@@ -118,16 +118,40 @@ describe("task sync", () => {
     expect(edited).toBe("- [ ] First\n- [ ] Last\n");
   });
 
-  it("links nested markdown tasks to their parent task uuid", () => {
+  it("links nested markdown tasks to their parent task URL", () => {
     const tasks = syncMarkdownTaskSource(baseFile, source, [
       {
         path: "/notes/today.md",
-        markdown: "- [ ] Parent\n  - [ ] Child\n    - [x] Grandchild\n- [ ] Sibling"
+        markdown: "- [ ] Parent\n\t- [ ] Child\n\t\t- [x] Grandchild\n- [ ] Sibling"
       }
     ]);
 
-    expect(tasks[1]?.parentTaskId).toBe(tasks[0]?.id);
-    expect(tasks[2]?.parentTaskId).toBe(tasks[1]?.id);
-    expect(tasks[3]?.parentTaskId).toBeUndefined();
+    expect(tasks[1]?.parentUrl).toBe(tasks[0]?.url);
+    expect(tasks[2]?.parentUrl).toBe(tasks[1]?.url);
+    expect(tasks[3]?.parentUrl).toBeUndefined();
+  });
+
+  it("moves markdown task rows under a parent URL", () => {
+    const markdown = "- [ ] Parent\n- [ ] Child\n";
+    const tasks = syncMarkdownTaskSource(baseFile, source, [{ path: "/notes/today.md", markdown }]);
+    const edited = updateMarkdownTaskParentText(markdown, tasks[1]!, tasks, tasks[0]?.url);
+
+    expect(edited).toBe("- [ ] Parent\n\t- [ ] Child\n");
+  });
+
+  it("unsets markdown task parents by moving the task above the parent block", () => {
+    const markdown = "- [ ] Parent\n\t- [ ] Child\n";
+    const tasks = syncMarkdownTaskSource(baseFile, source, [{ path: "/notes/today.md", markdown }]);
+    const edited = updateMarkdownTaskParentText(markdown, tasks[1]!, tasks);
+
+    expect(edited).toBe("- [ ] Child\n- [ ] Parent\n");
+  });
+
+  it("unsets nested markdown task parents one level up", () => {
+    const markdown = "- [ ] A\n\t- [ ] B\n\t\t- [ ] C\n";
+    const tasks = syncMarkdownTaskSource(baseFile, source, [{ path: "/notes/today.md", markdown }]);
+    const edited = updateMarkdownTaskParentText(markdown, tasks[2]!, tasks);
+
+    expect(edited).toBe("- [ ] A\n\t- [ ] C\n\t- [ ] B\n");
   });
 });

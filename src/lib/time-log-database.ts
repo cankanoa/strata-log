@@ -860,6 +860,18 @@ export const TimeLogDatabase = {
           updatedAt
         }, nextData, task.contents);
       }
+      if (path === "parentUrl") {
+        const parentUrl = typeof value === "string" && value.trim() ? value.trim() : undefined;
+        return {
+          ...task,
+          parentUrl,
+          updatedAt,
+          data: {
+            ...data,
+            parentUrl
+          }
+        };
+      }
       setNestedValue(data, path, value);
       const nextData = task.type === "Markdown" ? setMarkdownFieldMirror(data, path, value) : data;
       return withMarkdownHash({
@@ -871,7 +883,11 @@ export const TimeLogDatabase = {
       if (task.id !== taskId) {
         return task;
       }
-      const name = path === "contents" || path === "title" ? INTERNAL_TASK_TITLE_COLUMN_NAME : path.replace(/^data:/, "");
+      const name = path === "contents" || path === "title"
+        ? INTERNAL_TASK_TITLE_COLUMN_NAME
+        : path === "parentUrl"
+          ? "parentUrl"
+          : path.replace(/^data:/, "");
       return {
         ...task,
         values: {
@@ -891,7 +907,7 @@ export const TimeLogDatabase = {
           tasks.map((task) => ({
             uuid: task.id,
             source_id: task.sourceId,
-            parent_task_id: task.parentTaskId ?? null,
+            parent_url: task.parentUrl ?? null,
             type: task.type,
             url: task.url,
             contents: task.contents,

@@ -42,6 +42,16 @@ type GithubRepoApiItem = {
   owner?: { login?: string | null } | null;
 };
 
+type GithubIssueApiItem = {
+  number: number;
+  title: string;
+  body?: string | null;
+  html_url?: string | null;
+  state?: string | null;
+  updated_at?: string | null;
+  pull_request?: unknown;
+} & Record<string, unknown>;
+
 export type MarkdownTaskFile = {
   path: string;
   markdown: string;
@@ -52,7 +62,8 @@ const TASK_FIELD_PATTERN = /\s*\[([^\[\]:]+)::\s*([^\]]*)\]/g;
 const STANDARD_FIELD_ALIASES = {
   title: ["title", "name", "contents", "content", "text", "summary"],
   status: ["status", "state", "completed", "done", "checked"],
-  url: ["html_url", "url", "link", "path", "filePath"]
+  url: ["html_url", "url", "link", "path", "filePath"],
+  parentUrl: ["parentUrl", "parent_url", "parentIssueUrl", "parent_issue_url", "parent", "parentIssue", "parent_issue"]
 };
 
 const GITHUB_ISSUE_STATE_OPTIONS = ["open", "closed"];
@@ -184,6 +195,35 @@ function standardTaskFields(data: Record<string, unknown>, fallback: { title: st
     url: valueText(findAliasedValue(data, STANDARD_FIELD_ALIASES.url)) ?? fallback.url,
     status: standardStatus(findAliasedValue(data, STANDARD_FIELD_ALIASES.status)) ?? fallback.status
   };
+}
+
+function githubIssueUrlFromUnknown(value: unknown, repository?: string): string | undefined {
+  if (typeof value === "string") {
+    if (/^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+/i.test(value)) {
+      return value;
+    }
+    const number = Number(value.match(/#?(\d+)$/)?.[1]);
+    return repository && Number.isFinite(number) && number > 0
+      ? `https://github.com/${repository}/issues/${number}`
+      : undefined;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const direct = valueText(record.html_url) ?? valueText(record.url);
+  if (direct) {
+    return githubIssueUrlFromUnknown(direct, repository);
+  }
+  const fullName = valueText(record.repository) ?? valueText(record.repository_full_name) ?? repository;
+  const number = typeof record.number === "number" ? record.number : Number(valueText(record.number));
+  return fullName && Number.isFinite(number) && number > 0
+    ? `https://github.com/${fullName}/issues/${number}`
+    : undefined;
+}
+
+function parentUrlFromData(data: Record<string, unknown>, repository?: string): string | undefined {
+  return githubIssueUrlFromUnknown(findAliasedValue(data, STANDARD_FIELD_ALIASES.parentUrl), repository);
 }
 
 function parseMarkdownTaskContents(rawContents: string): { contents: string; fields: Record<string, string> } {
@@ -363,9 +403,9 @@ export function syncMarkdownTaskSource(file: TimeLogFile, source: TaskSource, fi
 
     return syncedTasks.map((task, index) => ({
       ...task,
-      parentTaskId: parsedTasks[index]?.parentIndex === undefined
+      parentUrl: parsedTasks[index]?.parentIndex === undefined
         ? undefined
-        : syncedTasks[parsedTasks[index].parentIndex!]?.id
+        : syncedTasks[parsedTasks[index].parentIndex!]?.url
     }));
   });
 }
@@ -440,15 +480,32 @@ export async function fetchGithubIssueTasks(
 ): Promise<TaskRow[]> {
   const octokit = new Octokit(account?.token ? { auth: account.token } : {});
   const repoIssues = await Promise.all(
-    (await githubReposForSource(source, octokit)).map(async (repo) => ({
-      repo,
-      issues: await octokit.paginate(octokit.rest.issues.listForRepo, {
+    (await githubReposForSource(source, octokit)).map(async (repo) => {
+      const openIssues = await octokit.paginate(octokit.rest.issues.listForRepo, {
         owner: repo.owner,
         repo: repo.repo,
         state: "open",
         per_page: 100
-      })
-    }))
+      }) as GithubIssueApiItem[];
+      const issuesByNumber = new Map<number, { issue: GithubIssueApiItem; parentIssue?: GithubIssueApiItem }>();
+      async function addIssueWithParents(issue: GithubIssueApiItem) {
+        if (issue.pull_request || issuesByNumber.has(issue.number)) {
+          return;
+        }
+        const parentIssue = await getGithubParentIssue(octokit, repo, issue.number) as GithubIssueApiItem | undefined;
+        issuesByNumber.set(issue.number, { issue, parentIssue });
+        if (parentIssue) {
+          await addIssueWithParents(parentIssue);
+        }
+      }
+      for (const issue of openIssues) {
+        await addIssueWithParents(issue);
+      }
+      return {
+        repo,
+        issues: [...issuesByNumber.values()]
+      };
+    })
   );
 
   let rank = LexoRank.middle();
@@ -459,13 +516,14 @@ export async function fetchGithubIssueTasks(
   });
 
   return repoIssues.flatMap(({ repo, issues }) => issues
-    .filter((issue) => !issue.pull_request)
-    .flatMap((issue) => {
+    .flatMap(({ issue, parentIssue }) => {
       const repository = `${repo.owner}/${repo.repo}`;
       const url = issue.html_url ?? `${githubRepoUrl(repo)}/issues/${issue.number}`;
       const rawIssue = toJsonObject(issue);
+      const rawParentIssue = parentIssue ? toJsonObject(parentIssue) : undefined;
       const issueData = {
         ...rawIssue,
+        parentIssue: rawParentIssue,
         repository,
         repository_owner: repo.owner,
         repository_name: repo.repo,
@@ -481,6 +539,7 @@ export async function fetchGithubIssueTasks(
         id: existing?.id ?? uuidv4(),
         sourceId: source.id,
         type: "Github",
+        parentUrl: parentUrlFromData(issueData, repository),
         url: issueStandard.url,
         contents: issueStandard.contents,
         status: issueStandard.status,
@@ -512,7 +571,7 @@ export async function fetchGithubIssueTasks(
         return {
           id: existingChild?.id ?? uuidv4(),
           sourceId: source.id,
-          parentTaskId: issueTask.id,
+          parentUrl: issueTask.url,
           type: "Github" as const,
           url: childStandard.url,
           contents: childStandard.contents,
@@ -527,12 +586,25 @@ export async function fetchGithubIssueTasks(
         issueTask,
         ...childTasks.map((task, index) => ({
           ...task,
-          parentTaskId: parsedChildren[index]?.parentIndex === undefined
-            ? issueTask.id
-            : childTasks[parsedChildren[index].parentIndex!]?.id
+          parentUrl: parsedChildren[index]?.parentIndex === undefined
+            ? issueTask.url
+            : childTasks[parsedChildren[index].parentIndex!]?.url
         }))
       ];
     }));
+}
+
+async function getGithubParentIssue(octokit: GithubClient, repo: GithubRepoTarget, issueNumberValue: number): Promise<unknown | undefined> {
+  try {
+    const response = await octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}/parent", {
+      owner: repo.owner,
+      repo: repo.repo,
+      issue_number: issueNumberValue
+    });
+    return response.data;
+  } catch {
+    return undefined;
+  }
 }
 
 async function optionalPaginated<T>(callback: () => Promise<T[]>): Promise<T[]> {
@@ -668,12 +740,75 @@ function issueNumber(task: TaskRow): number | null {
   return Number.isFinite(raw) && raw > 0 ? raw : null;
 }
 
+function issueUrlNumber(url: string): number | null {
+  const raw = Number(String(url.match(/\/issues\/(\d+)/)?.[1] ?? ""));
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+function githubIssueId(task: TaskRow): number | null {
+  const raw = typeof task.data.id === "number" ? task.data.id : Number(String(task.data.id ?? ""));
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
 function parentIssueNumber(task: TaskRow): number | null {
   const parentIssue = task.data.parentIssue;
   const raw = parentIssue && typeof parentIssue === "object" && "number" in parentIssue
     ? Number((parentIssue as { number?: unknown }).number)
     : Number(String(task.url.match(/\/issues\/(\d+)/)?.[1] ?? ""));
   return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+async function removeGithubSubIssueParent(octokit: GithubClient, childRepo: GithubRepoTarget, task: TaskRow, subIssueId: number): Promise<void> {
+  const childIssueNumber = issueNumber(task);
+  if (!childIssueNumber) {
+    return;
+  }
+  const currentParent = await getGithubParentIssue(octokit, childRepo, childIssueNumber);
+  const parentUrl = githubIssueUrlFromUnknown(currentParent);
+  const parentRepo = parentUrl ? githubRepoTarget(parentUrl) : childRepo;
+  const parentNumber = parentUrl ? issueUrlNumber(parentUrl) : null;
+  if (!parentRepo || !parentNumber) {
+    return;
+  }
+  await octokit.request("DELETE /repos/{owner}/{repo}/issues/{issue_number}/sub_issue", {
+    owner: parentRepo.owner,
+    repo: parentRepo.repo,
+    issue_number: parentNumber,
+    sub_issue_id: subIssueId
+  } as never);
+}
+
+export async function updateGithubTaskParent(
+  source: TaskSource,
+  task: TaskRow,
+  parentUrl: string | undefined,
+  account?: OnlineAccount
+): Promise<void> {
+  const childRepo = githubRepositoryFromTask(source, task);
+  const subIssueId = githubIssueId(task);
+  const rawObjectType = task.data.__strata && typeof task.data.__strata === "object"
+    ? (task.data.__strata as { rawObjectType?: string }).rawObjectType
+    : undefined;
+  if (!childRepo || !subIssueId || rawObjectType !== "github_issue") {
+    return;
+  }
+  const octokit = new Octokit(account?.token ? { auth: account.token } : {});
+  if (!parentUrl) {
+    await removeGithubSubIssueParent(octokit, childRepo, task, subIssueId);
+    return;
+  }
+  const parentRepo = githubRepoTarget(parentUrl);
+  const parentNumber = issueUrlNumber(parentUrl);
+  if (!parentRepo || !parentNumber) {
+    throw new Error("GitHub parent task must be a GitHub issue URL.");
+  }
+  await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/sub_issues", {
+    owner: parentRepo.owner,
+    repo: parentRepo.repo,
+    issue_number: parentNumber,
+    sub_issue_id: subIssueId,
+    replace_parent: true
+  } as never);
 }
 
 function valueArray(value: MetadataValue): string[] {
@@ -710,20 +845,42 @@ function openStatusFromValue(value: MetadataValue): boolean {
   return openStatusFromText(valueRecordText(value) ?? "") ?? true;
 }
 
-function markdownTaskLineFromValues(values: Record<string, MetadataValue>): string {
+function markdownTaskLineFromValues(values: Record<string, MetadataValue>, prefix = "- "): string {
   const contents = valueRecordText(values.title) ?? valueRecordText(values.contents) ?? "Untitled task";
   const checked = !openStatusFromValue(values.status);
   const fields = Object.entries(values)
-    .filter(([key]) => !["contents", "status", "title"].includes(key))
+    .filter(([key]) => !["contents", "parentUrl", "status", "title"].includes(key))
     .flatMap(([key, value]) => {
       const text = valueRecordText(value);
       return text ? [` [${key.replace(/^data:/, "")}:: ${text}]`] : [];
     })
     .join("");
-  return `- [${checked ? "x" : " "}] ${contents}${fields}`;
+  return `${prefix}[${checked ? "x" : " "}] ${contents}${fields}`;
 }
 
-export function createMarkdownTaskText(markdown: string, values: Record<string, MetadataValue>): string {
+export function createMarkdownTaskText(
+  markdown: string,
+  values: Record<string, MetadataValue>,
+  options: { parentUrl?: string; tasks?: TaskRow[]; filePath?: string } = {}
+): string {
+  if (options.parentUrl && options.tasks?.length && options.filePath) {
+    const parent = options.tasks.find((task) => task.url === options.parentUrl);
+    if (!parent) {
+      throw new Error("Parent task was not found.");
+    }
+    const parentTask = locateMarkdownTask(markdown, parent, options.tasks);
+    if (!parentTask) {
+      throw new Error("Parent markdown task could not be found in the source file.");
+    }
+    const parsedTasks = parseMarkdownTasks(options.filePath, markdown);
+    const parentIndent = parentTask.indent.replace(/\t/g, "    ").length;
+    const insertIndex = parsedTasks
+      .filter((task) => task.startIndex > parentTask.startIndex)
+      .find((task) => task.indent.replace(/\t/g, "    ").length <= parentIndent)?.startIndex ?? parentTask.endIndex;
+    const line = markdownTaskLineFromValues(values, `${parentTask.indent}\t${parentTask.marker || "-"} `);
+    const before = markdown.slice(0, insertIndex);
+    return `${before}${before.endsWith("\n") || before.endsWith("\r") ? "" : "\n"}${line}\n${markdown.slice(insertIndex)}`;
+  }
   const line = markdownTaskLineFromValues(values);
   if (!markdown.trim()) {
     return `${line}\n`;
@@ -736,33 +893,72 @@ export async function updateGithubTaskField(
   task: TaskRow,
   field: TaskFieldMetadata,
   value: MetadataValue,
-  account?: OnlineAccount
-): Promise<void> {
+  account?: OnlineAccount,
+  tasks: TaskRow[] = [task]
+): Promise<boolean> {
   const repo = githubRepositoryFromTask(source, task);
   const number = issueNumber(task);
   const rawObjectType = task.data.__strata && typeof task.data.__strata === "object"
     ? (task.data.__strata as { rawObjectType?: string }).rawObjectType
     : undefined;
   if (!repo) {
-    return;
+    return false;
   }
   const octokit = new Octokit(account?.token ? { auth: account.token } : {});
+  if (field.path === "parentUrl") {
+    if (rawObjectType === "github_checklist_task") {
+      const parentNumber = parentIssueNumber(task);
+      if (!parentNumber) {
+        return false;
+      }
+      const issue = await octokit.rest.issues.get({ owner: repo.owner, repo: repo.repo, issue_number: parentNumber });
+      await octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
+        owner: repo.owner,
+        repo: repo.repo,
+        issue_number: parentNumber,
+        body: updateMarkdownTaskParentText(issue.data.body ?? "", task, tasks, valueRecordText(value))
+      });
+      return true;
+    }
+    await updateGithubTaskParent(source, task, valueRecordText(value), account);
+    return true;
+  }
   if (field.path === "status" && rawObjectType === "github_checklist_task") {
     const parentNumber = parentIssueNumber(task);
     if (!parentNumber) {
-      return;
+      return false;
+    }
+    const issue = await octokit.rest.issues.get({ owner: repo.owner, repo: repo.repo, issue_number: parentNumber });
+    await octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
+        owner: repo.owner,
+        repo: repo.repo,
+        issue_number: parentNumber,
+      body: updateMarkdownTaskText(issue.data.body ?? "", task, tasks, "status", value === false ? "closed" : "open")
+    });
+    return true;
+  }
+  if (rawObjectType === "github_checklist_task") {
+    const parentNumber = parentIssueNumber(task);
+    if (!parentNumber) {
+      return false;
     }
     const issue = await octokit.rest.issues.get({ owner: repo.owner, repo: repo.repo, issue_number: parentNumber });
     await octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
       owner: repo.owner,
       repo: repo.repo,
       issue_number: parentNumber,
-      body: updateMarkdownTaskText(issue.data.body ?? "", task, [task], "status", value === false ? "closed" : "open")
+      body: updateMarkdownTaskText(
+        issue.data.body ?? "",
+        task,
+        tasks,
+        field.path,
+        Array.isArray(value) ? value.join(", ") : String(value ?? "")
+      )
     });
-    return;
+    return true;
   }
   if (!number || rawObjectType !== "github_issue") {
-    return;
+    return false;
   }
   if (field.updateKind === "github_issue_field" && field.fieldId !== undefined) {
     await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/issue-field-values", {
@@ -774,7 +970,7 @@ export async function updateGithubTaskField(
         value: field.type === "multiselect" ? valueArray(value) : valueString(value) ?? ""
       }]
     } as never);
-    return;
+    return true;
   }
 
   const payload: Record<string, unknown> = {};
@@ -786,7 +982,7 @@ export async function updateGithubTaskField(
   } else if (["title", "body", "state", "state_reason", "type"].includes(path)) {
     payload[path] = field.path === "status" ? (value === false ? "closed" : "open") : valueString(value);
   } else {
-    return;
+    return false;
   }
   await octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
     owner: repo.owner,
@@ -794,6 +990,7 @@ export async function updateGithubTaskField(
     issue_number: number,
     ...payload
   } as never);
+  return true;
 }
 
 export async function createGithubTask(
@@ -830,6 +1027,9 @@ export async function createGithubTask(
     updatedAt: response.data.updated_at ?? undefined,
     data: issueData
   };
+  if (typeof values.parentUrl === "string" && values.parentUrl.trim()) {
+    await updateGithubTaskParent(source, task, values.parentUrl.trim(), account);
+  }
   if (values.status !== undefined) {
     await updateGithubTaskField(
       source,
@@ -980,6 +1180,88 @@ export function replaceMarkdownTask(
 ): string {
   const updatedTask = updater(task);
   return `${markdown.slice(0, task.startIndex)}${markdownTaskLineFromParsed(updatedTask, updatedTask.checked)}${markdown.slice(task.endIndex)}`;
+}
+
+function markdownTaskBlock(markdown: string, task: ParsedMarkdownTask, parsedTasks: ParsedMarkdownTask[]) {
+  const indent = indentWidth(task.indent);
+  const endIndex = parsedTasks
+    .filter((candidate) => candidate.startIndex > task.startIndex)
+    .find((candidate) => indentWidth(candidate.indent) <= indent)?.startIndex ?? task.endIndex;
+  return {
+    text: markdown.slice(task.startIndex, endIndex),
+    startIndex: task.startIndex,
+    endIndex
+  };
+}
+
+function indentWidth(indent: string): number {
+  return indent.replace(/\t/g, "    ").length;
+}
+
+function markdownUnsetParentBoundary(task: ParsedMarkdownTask, parsedTasks: ParsedMarkdownTask[]): ParsedMarkdownTask | undefined {
+  const currentIndent = indentWidth(task.indent);
+  const taskIndex = parsedTasks.findIndex((candidate) => candidate.startIndex === task.startIndex);
+  for (let index = taskIndex - 1; index >= 0; index -= 1) {
+    const candidate = parsedTasks[index];
+    if (candidate && indentWidth(candidate.indent) < currentIndent) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function reindentMarkdownBlock(block: string, currentIndent: string, nextIndent: string): string {
+  return block
+    .split(/(\r\n|\n|\r)/)
+    .map((part, index, parts) => {
+      if (index % 2 === 1 || index === parts.length - 1 && part === "") {
+        return part;
+      }
+      return part.startsWith(currentIndent)
+        ? `${nextIndent}${part.slice(currentIndent.length)}`
+        : part;
+    })
+    .join("");
+}
+
+export function updateMarkdownTaskParentText(markdown: string, task: TaskRow, tasks: TaskRow[], parentUrl?: string): string {
+  const filePath = markdownTaskFilePath(task);
+  const parsedTasks = parseMarkdownTasks(filePath, markdown);
+  const located = locateMarkdownTask(markdown, task, tasks);
+  if (!located) {
+    throw new Error("Markdown task could not be found in the source file.");
+  }
+  const block = markdownTaskBlock(markdown, located, parsedTasks);
+  if (!parentUrl) {
+    const boundary = markdownUnsetParentBoundary(located, parsedTasks);
+    const nextBlock = reindentMarkdownBlock(block.text, located.indent, boundary?.indent ?? "");
+    if (!boundary) {
+      return `${markdown.slice(0, block.startIndex)}${nextBlock}${markdown.slice(block.endIndex)}`;
+    }
+    const withoutBlock = `${markdown.slice(0, block.startIndex)}${markdown.slice(block.endIndex)}`;
+    return `${withoutBlock.slice(0, boundary.startIndex)}${nextBlock}${withoutBlock.slice(boundary.startIndex)}`;
+  }
+  const parent = tasks.find((candidate) => candidate.url === parentUrl);
+  if (!parent) {
+    throw new Error("Parent task was not found.");
+  }
+  const parentTask = locateMarkdownTask(markdown, parent, tasks);
+  if (!parentTask) {
+    throw new Error("Parent markdown task could not be found in the source file.");
+  }
+  const parentBlock = markdownTaskBlock(markdown, parentTask, parsedTasks);
+  if (parentTask.startIndex >= block.startIndex && parentTask.startIndex < block.endIndex) {
+    throw new Error("A task cannot be moved under itself.");
+  }
+  const nextIndent = `${parentTask.indent}\t`;
+  const nextBlock = reindentMarkdownBlock(block.text, located.indent, nextIndent);
+  const withoutBlock = `${markdown.slice(0, block.startIndex)}${markdown.slice(block.endIndex)}`;
+  const removedBeforeParent = block.startIndex < parentBlock.endIndex;
+  const insertIndex = removedBeforeParent
+    ? parentBlock.endIndex - (block.endIndex - block.startIndex)
+    : parentBlock.endIndex;
+  const before = withoutBlock.slice(0, insertIndex);
+  return `${before}${before.endsWith("\n") || before.endsWith("\r") ? "" : "\n"}${nextBlock}${nextBlock.endsWith("\n") || nextBlock.endsWith("\r") ? "" : "\n"}${withoutBlock.slice(insertIndex)}`;
 }
 
 export function updateMarkdownTaskText(

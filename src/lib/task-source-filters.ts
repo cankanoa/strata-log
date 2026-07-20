@@ -1,5 +1,6 @@
 import { getActiveMetadataFields } from "@/lib/attribute-references";
 import { githubRepositorySlugFromTask } from "@/lib/github-task-sources";
+import type { TaskSourceChoiceGroup } from "@/lib/task-query";
 import type { MetadataValue, SessionMetadata, TaskDisplayRow, TimeLogFile } from "@/lib/types";
 
 function metadataStrings(value: MetadataValue): string[] {
@@ -29,5 +30,23 @@ export function filterTaskDisplayRowsBySourceUrls(
     const sourceUrl = source?.url.trim() ?? "";
     const repository = source?.type === "Github" ? githubRepositorySlugFromTask(source, task) : undefined;
     return selectedUrls.has(sourceUrl) || Boolean(repository && selectedUrls.has(repository));
+  });
+}
+
+export function filterTaskSourceChoiceGroupsBySourceUrls(
+  groups: TaskSourceChoiceGroup[],
+  selectedUrls: Set<string>
+): TaskSourceChoiceGroup[] {
+  if (selectedUrls.size === 0) {
+    return groups;
+  }
+
+  return groups.flatMap((group) => {
+    const choices = group.choices.filter((choice) => {
+      const sourceUrl = choice.source.url.trim();
+      const targetUrl = choice.targetUrl?.trim();
+      return selectedUrls.has(sourceUrl) || Boolean(targetUrl && selectedUrls.has(targetUrl));
+    });
+    return choices.length > 0 ? [{ ...group, choices }] : [];
   });
 }
