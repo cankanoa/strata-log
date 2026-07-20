@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { Github, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -28,6 +28,7 @@ import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
 
 const NO_ACCOUNT = "__none__";
+const ACCOUNT_TYPE_OPTIONS = ["Github"] as const;
 const MANDATORY_INTERNAL_TASK_COLUMNS = [
   INTERNAL_TASK_TITLE_COLUMN_NAME,
   INTERNAL_TASK_STATUS_COLUMN_NAME,
@@ -73,7 +74,7 @@ function taskSourceDisplayName(source: TaskSource): string {
 
 function taskSourceUrlPlaceholder(type: TaskSourceType): string {
   if (type === "Github") {
-    return "https://github.com/owner/repo";
+    return "owner/repo, user, or org";
   }
   return type === "Internal Task" ? "Columns" : "**/*.md";
 }
@@ -101,6 +102,35 @@ function normalizeInternalColumn(field: FieldDefinition): FieldDefinition {
 
 function columnSummary(columnNames: string[]): string {
   return columnNames.length > 0 ? columnNames.join(", ") : "No columns";
+}
+
+function accountsForSourceType(accounts: OnlineAccount[], type: TaskSourceType): OnlineAccount[] {
+  return type === "Github" ? accounts.filter((account) => account.type === "Github") : [];
+}
+
+function AccountTypeSelect({
+  value,
+  disabled = false,
+  onChange
+}: {
+  value: OnlineAccount["type"];
+  disabled?: boolean;
+  onChange?: (type: OnlineAccount["type"]) => void;
+}) {
+  return (
+    <Select value={value} disabled={disabled} onValueChange={(nextValue) => nextValue && onChange?.(nextValue as OnlineAccount["type"])}>
+      <SelectTrigger className="w-full">
+        <SelectValue>{value}</SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {ACCOUNT_TYPE_OPTIONS.map((type) => (
+          <SelectItem key={type} value={type}>
+            {type}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
 }
 
 function ColumnAccessDialog({
@@ -182,7 +212,9 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
   const [newSourceName, setNewSourceName] = useState("");
   const [newSourceUrl, setNewSourceUrl] = useState("");
   const [newSourceColumnNames, setNewSourceColumnNames] = useState<string[]>(MANDATORY_INTERNAL_TASK_COLUMNS);
+  const [newSourceAccountId, setNewSourceAccountId] = useState<string | undefined>();
   const [newAccountName, setNewAccountName] = useState("");
+  const [newAccountUsername, setNewAccountUsername] = useState("");
   const [newAccountToken, setNewAccountToken] = useState("");
   const [newColumnName, setNewColumnName] = useState("");
   const [newColumnType, setNewColumnType] = useState<FieldDefinition["type"]>("string");
@@ -228,12 +260,14 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
         name: newSourceName.trim() || undefined,
         type: newSourceType,
         url: newSourceType === "Internal Task" ? internalTaskSourceUrl(id) : newSourceUrl.trim(),
+        accountId: newSourceType === "Github" ? newSourceAccountId : undefined,
         columnNames: newSourceType === "Internal Task" ? newSourceColumnNames : undefined
       }
     ]);
     setNewSourceName("");
     setNewSourceUrl("");
     setNewSourceColumnNames(MANDATORY_INTERNAL_TASK_COLUMNS);
+    setNewSourceAccountId(undefined);
   }
 
   function openSourceColumnsEditor(source: TaskSource) {
@@ -309,7 +343,7 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
   }
 
   async function addAccount() {
-    if (!newAccountName.trim() || !newAccountToken.trim()) {
+    if (!newAccountName.trim()) {
       return;
     }
     await updateAccounts([
@@ -318,10 +352,12 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
         id: uuidv4(),
         type: "Github",
         name: newAccountName.trim(),
-        token: newAccountToken.trim()
+        username: newAccountUsername.trim() || undefined,
+        token: newAccountToken.trim() || undefined
       }
     ]);
     setNewAccountName("");
+    setNewAccountUsername("");
     setNewAccountToken("");
   }
 
@@ -408,7 +444,7 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value={NO_ACCOUNT}>None</SelectItem>
-                          {accounts.map((account) => (
+                          {accountsForSourceType(accounts, source.type).map((account) => (
                             <SelectItem key={account.id} value={account.id}>
                               {account.name}
                             </SelectItem>
@@ -416,7 +452,7 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
                         </SelectContent>
                       </Select>
                     ) : (
-                      <span className="text-muted-foreground">None</span>
+                      <span className="text-muted-foreground">-</span>
                     )}
                   </TableCell>
                   <TableCell>
@@ -435,7 +471,17 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
               ))}
               <TableRow>
                 <TableCell>
-                  <Select value={newSourceType} onValueChange={(value) => setNewSourceType(value as TaskSourceType)} disabled={!file}>
+                  <Select
+                    value={newSourceType}
+                    onValueChange={(value) => {
+                      const type = value as TaskSourceType;
+                      setNewSourceType(type);
+                      if (type !== "Github" || !accountsForSourceType(accounts, type).some((account) => account.id === newSourceAccountId)) {
+                        setNewSourceAccountId(undefined);
+                      }
+                    }}
+                    disabled={!file}
+                  >
                     <SelectTrigger className="w-full">
                       <SelectValue>{sourceLabel(newSourceType)}</SelectValue>
                     </SelectTrigger>
@@ -471,7 +517,31 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
                     />
                   )}
                 </TableCell>
-                <TableCell className="text-muted-foreground">New source</TableCell>
+                <TableCell>
+                  {newSourceType === "Github" ? (
+                    <Select
+                      value={newSourceAccountId ?? NO_ACCOUNT}
+                      disabled={!file}
+                      onValueChange={(value) => setNewSourceAccountId(value && value !== NO_ACCOUNT ? String(value) : undefined)}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue>
+                          {accounts.find((account) => account.id === newSourceAccountId)?.name ?? "None"}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NO_ACCOUNT}>None</SelectItem>
+                        {accountsForSourceType(accounts, newSourceType).map((account) => (
+                          <SelectItem key={account.id} value={account.id}>
+                            {account.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <span className="text-muted-foreground">-</span>
+                  )}
+                </TableCell>
                 <TableCell>
                   <div className="flex justify-end">
                     <Button type="button" size="icon" disabled={!file || (newSourceType !== "Internal Task" && !newSourceUrl.trim())} onClick={() => void addSource()}>
@@ -685,10 +755,7 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
               {accounts.map((account) => (
                 <TableRow key={account.id}>
                   <TableCell>
-                    <span className="inline-flex items-center gap-2">
-                      <Github className="size-4" />
-                      Github
-                    </span>
+                    <AccountTypeSelect value={account.type} onChange={(type) => void saveAccount(account, { type })} />
                   </TableCell>
                   <TableCell>
                     <Input key={account.name} defaultValue={account.name} onBlur={(event) => void saveAccount(account, { name: event.target.value.trim() || account.name })} />
@@ -710,21 +777,20 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
               ))}
               <TableRow>
                 <TableCell>
-                  <span className="inline-flex items-center gap-2">
-                    <Github className="size-4" />
-                    Github
-                  </span>
+                  <AccountTypeSelect value="Github" disabled={!file} />
                 </TableCell>
                 <TableCell>
                   <Input value={newAccountName} disabled={!file} onChange={(event) => setNewAccountName(event.target.value)} placeholder="Personal" />
                 </TableCell>
-                <TableCell className="text-muted-foreground">Optional</TableCell>
+                <TableCell>
+                  <Input value={newAccountUsername} disabled={!file} onChange={(event) => setNewAccountUsername(event.target.value)} placeholder="Username" />
+                </TableCell>
                 <TableCell>
                   <Input type="password" value={newAccountToken} disabled={!file} onChange={(event) => setNewAccountToken(event.target.value)} placeholder="Token" />
                 </TableCell>
                 <TableCell>
                   <div className="flex justify-end">
-                    <Button type="button" size="icon" disabled={!file || !newAccountName.trim() || !newAccountToken.trim()} onClick={() => void addAccount()}>
+                    <Button type="button" size="icon" disabled={!file || !newAccountName.trim()} onClick={() => void addAccount()}>
                       <Plus className="size-4" />
                     </Button>
                   </div>

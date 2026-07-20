@@ -26,7 +26,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { getFieldSelection } from "@/lib/metadata";
 import { INTERNAL_TASK_BODY_COLUMN_NAME, INTERNAL_TASK_STATUS_COLUMN_NAME, INTERNAL_TASK_TITLE_COLUMN_NAME } from "@/lib/internal-tasks";
 import { taskDisplayRows, taskReferenceKey, taskSourceLabel } from "@/lib/task-query";
-import type { ActiveTaskReference, FieldDefinition, MetadataValue, TaskDisplayRow, TaskFieldMetadata, TaskSource, TaskSourceType } from "@/lib/types";
+import { filterTaskDisplayRowsBySourceUrls, getTrackTaskSourceFilterUrls } from "@/lib/task-source-filters";
+import type { ActiveTaskReference, FieldDefinition, MetadataValue, TaskDisplayRow, TaskFieldMetadata, TaskSource } from "@/lib/types";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
 
@@ -1033,14 +1034,27 @@ function renderCell(column: TaskTableColumn, task: TaskDisplayRow, sourcesById: 
 
 export function TasksPage() {
   const navigate = useNavigate();
-  const { file, createTask, deleteTask, updateActiveTasks, updateTaskField } = useAppStore(useShallow((state) => ({
+  const { file, trackDraftMetadata, createTask, deleteTask, updateActiveTasks, updateTaskField } = useAppStore(useShallow((state) => ({
     file: state.file,
+    trackDraftMetadata: state.trackDraftMetadata,
     createTask: state.createTask,
     deleteTask: state.deleteTask,
     updateActiveTasks: state.updateActiveTasks,
     updateTaskField: state.updateTaskField
   })));
-  const tasks = useMemo(() => file ? taskDisplayRows(file) : [], [file]);
+  const taskSourceFilterUrls = useMemo(
+    () => file ? getTrackTaskSourceFilterUrls(file, trackDraftMetadata) : new Set<string>(),
+    [file, trackDraftMetadata]
+  );
+  const tasks = useMemo(() => {
+    if (!file) {
+      return [];
+    }
+    const rows = taskDisplayRows(file);
+    return taskSourceFilterUrls.size > 0
+      ? filterTaskDisplayRowsBySourceUrls(file, rows, taskSourceFilterUrls)
+      : rows;
+  }, [file, taskSourceFilterUrls]);
   const sourcesById = useMemo(
     () => new Map((file?.taskSources ?? []).map((source) => [source.id, source])),
     [file?.taskSources]
@@ -1054,7 +1068,6 @@ export function TasksPage() {
   const [columnState, setColumnState] = useState<ColumnState[]>([]);
   const [filters, setFilters] = useState<FilterState[]>([]);
   const [sorts, setSorts] = useState<SortState[]>([]);
-  const [newTaskType, setNewTaskType] = useState<TaskSourceType>("Internal Task");
   const [newTaskSourceId, setNewTaskSourceId] = useState("");
   const [newTaskValues, setNewTaskValues] = useState<Record<string, MetadataValue>>({ status: true });
   const [newTaskActive, setNewTaskActive] = useState(false);
@@ -1102,10 +1115,7 @@ export function TasksPage() {
   const activeFilters = hasActiveFilters(filters);
   const activeSorts = hasActiveSorts(sorts);
   const cellClassName = view === "large-table" ? "whitespace-nowrap px-4 py-3" : undefined;
-  const newTaskSourceOptions = useMemo(
-    () => (file?.taskSources ?? []).filter((source) => source.type === newTaskType),
-    [file?.taskSources, newTaskType]
-  );
+  const newTaskSourceOptions = file?.taskSources ?? [];
   const newTaskSource = newTaskSourceOptions.find((source) => source.id === newTaskSourceId) ?? newTaskSourceOptions[0];
 
   function updateColumnState(updater: (current: ColumnState[]) => ColumnState[]) {
@@ -1191,18 +1201,18 @@ export function TasksPage() {
     setNewTaskValues((current) => ({ ...current, [path]: value }));
   }
 
-  function changeNewTaskType(type: TaskSourceType) {
-    const nextSource = (file?.taskSources ?? []).find((source) => source.type === type);
-    setNewTaskType(type);
-    setNewTaskSourceId(nextSource?.id ?? "");
+  function changeNewTaskSource(sourceId: string) {
+    setNewTaskSourceId(sourceId);
     setNewTaskValues({ status: true });
   }
 
   async function handleCreateTask() {
+    if (!newTaskSource) {
+      return;
+    }
     setCreatingTask(true);
     const ok = await createTask({
-      type: newTaskType,
-      sourceId: newTaskSource?.id,
+      sourceId: newTaskSource.id,
       values: newTaskValues,
       active: newTaskActive
     });
@@ -1235,23 +1245,9 @@ export function TasksPage() {
     }
     if (column.id === "type") {
       return (
-        <Select value={newTaskType} onValueChange={(value) => changeNewTaskType(value as TaskSourceType)}>
-          <SelectTrigger className="w-full min-w-32">
-            <SelectTriggerText value={newTaskType} placeholder="Type" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="Markdown">Markdown</SelectItem>
-            <SelectItem value="Internal Task">Internal Task</SelectItem>
-            <SelectItem value="Github">Github</SelectItem>
-          </SelectContent>
-        </Select>
-      );
-    }
-    if (column.id === "source") {
-      return (
-        <Select value={newTaskSource?.id} disabled={newTaskSourceOptions.length === 0} onValueChange={(value) => value !== null && setNewTaskSourceId(value)}>
+        <Select value={newTaskSource?.id} disabled={newTaskSourceOptions.length === 0} onValueChange={(value) => value !== null && changeNewTaskSource(value)}>
           <SelectTrigger className="w-full min-w-40">
-            <SelectTriggerText value={newTaskSource ? taskSourceLabel(newTaskSource) : undefined} placeholder="Source" />
+            <SelectTriggerText value={newTaskSource ? taskSourceLabel(newTaskSource) : undefined} placeholder="Task Source" />
           </SelectTrigger>
           <SelectContent>
             {newTaskSourceOptions.map((source) => (
@@ -1262,6 +1258,9 @@ export function TasksPage() {
           </SelectContent>
         </Select>
       );
+    }
+    if (column.id === "source") {
+      return <span className="text-muted-foreground">{newTaskSource?.type ?? "—"}</span>;
     }
     if (column.id === "url") {
       return <span className="text-muted-foreground">Generated</span>;

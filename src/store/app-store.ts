@@ -43,7 +43,6 @@ import type {
   SessionPreset,
   SessionMetadata,
   TaskFieldMetadata,
-  TaskSourceType,
   TaskSource,
   TimeLogFile
 } from "@/lib/types";
@@ -105,8 +104,7 @@ type StoreState = AppSnapshot & {
   renameInternalTaskColumn: (previousName: string, nextName: string) => Promise<boolean>;
   updateActiveTasks: (activeTasks: ActiveTaskReference[]) => Promise<boolean>;
   createTask: (input: {
-    type: TaskSourceType;
-    sourceId?: string;
+    sourceId: string;
     values: Record<string, MetadataValue>;
     active?: boolean;
   }) => Promise<boolean>;
@@ -738,11 +736,9 @@ export const useAppStore = create<StoreState>((set, get) => ({
       set({ errors: ["Open a file before creating tasks."] });
       return false;
     }
-    const source = current.taskSources.find((candidate) =>
-      candidate.type === input.type && (!input.sourceId || candidate.id === input.sourceId)
-    );
+    const source = current.taskSources.find((candidate) => candidate.id === input.sourceId);
     if (!source) {
-      set({ errors: [`Create a ${input.type} task source before adding this task.`] });
+      set({ errors: ["Choose a task source before adding this task."] });
       return false;
     }
 

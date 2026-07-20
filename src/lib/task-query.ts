@@ -9,7 +9,7 @@ export function taskSourceLabel(source: TaskSource | undefined): string {
     return source.name.trim();
   }
   if (source.type === "Github") {
-    return source.url.replace(/^https:\/\/github\.com\//i, "");
+    return source.url.replace(/^(?:https?:\/\/)?github\.com\//i, "");
   }
   if (source.type === "Internal Task") {
     return "Internal Task";

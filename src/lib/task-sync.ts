@@ -24,6 +24,24 @@ type ParsedMarkdownTask = {
   lineEnd: string;
 };
 
+type GithubRepoTarget = {
+  owner: string;
+  repo: string;
+};
+
+type GithubSourceTarget = {
+  owner: string;
+  repo?: string;
+};
+
+type GithubClient = InstanceType<typeof Octokit>;
+
+type GithubRepoApiItem = {
+  name?: string | null;
+  full_name?: string | null;
+  owner?: { login?: string | null } | null;
+};
+
 export type MarkdownTaskFile = {
   path: string;
   markdown: string;
@@ -40,6 +58,54 @@ const STANDARD_FIELD_ALIASES = {
 const GITHUB_ISSUE_STATE_OPTIONS = ["open", "closed"];
 const GITHUB_ISSUE_STATE_REASON_OPTIONS = ["completed", "not_planned", "duplicate", "reopened"];
 const textEncoder = new TextEncoder();
+
+function githubSourceTarget(value: string): GithubSourceTarget | null {
+  const cleaned = value
+    .trim()
+    .replace(/^git@github\.com:/i, "")
+    .replace(/^https?:\/\/api\.github\.com\/repos\//i, "")
+    .replace(/^https?:\/\/github\.com\//i, "")
+    .replace(/^github\.com\//i, "")
+    .split(/[?#]/)[0]
+    .replace(/^\/+|\/+$/g, "");
+  const [owner, repo] = cleaned.split("/").filter(Boolean);
+  if (!owner) {
+    return null;
+  }
+  return {
+    owner: owner.replace(/^@/, ""),
+    repo: repo?.replace(/\.git$/i, "")
+  };
+}
+
+function repoMatch(source: TaskSource): GithubRepoTarget | null {
+  const target = githubSourceTarget(source.url);
+  return target?.repo ? { owner: target.owner, repo: target.repo } : null;
+}
+
+function ownerMatch(source: TaskSource): { owner: string } | null {
+  const target = githubSourceTarget(source.url);
+  return target && !target.repo ? { owner: target.owner } : null;
+}
+
+function githubRepoUrl(repo: GithubRepoTarget): string {
+  return `https://github.com/${repo.owner}/${repo.repo}`;
+}
+
+function githubRepoFromApiItem(repo: GithubRepoApiItem, fallbackOwner: string): GithubRepoTarget | null {
+  const fullNameTarget = typeof repo.full_name === "string" ? githubSourceTarget(repo.full_name) : null;
+  const owner = fullNameTarget?.owner ?? repo.owner?.login ?? fallbackOwner;
+  const name = fullNameTarget?.repo ?? repo.name;
+  return owner && name ? { owner, repo: name } : null;
+}
+
+function uniqueText(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))].sort((left, right) => left.localeCompare(right));
+}
+
+function errorStatus(error: unknown): number {
+  return typeof error === "object" && error && "status" in error ? Number(error.status) : 0;
+}
 
 function byteLength(text: string): number {
   return textEncoder.encode(text).length;
@@ -337,14 +403,65 @@ export function syncMarkdownTaskSource(file: TimeLogFile, source: TaskSource, fi
   });
 }
 
-function repoMatch(source: TaskSource): { owner: string; repo: string } | null {
-  const match = source.url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)(?:\/.*)?$/i);
-  return match ? { owner: match[1], repo: match[2] } : null;
+export function isGithubAuthError(error: unknown): boolean {
+  return [401, 403, 404].includes(errorStatus(error));
 }
 
-export function isGithubAuthError(error: unknown): boolean {
-  const status = typeof error === "object" && error && "status" in error ? Number(error.status) : 0;
-  return [401, 403, 404].includes(status);
+async function githubReposForOwner(octokit: GithubClient, owner: string): Promise<GithubRepoTarget[]> {
+  let repos: GithubRepoApiItem[];
+  try {
+    repos = await octokit.paginate(octokit.rest.repos.listForOrg, {
+      org: owner,
+      type: "all",
+      per_page: 100
+    }) as GithubRepoApiItem[];
+  } catch (error) {
+    if (errorStatus(error) !== 404) {
+      throw error;
+    }
+    repos = await octokit.paginate(octokit.rest.repos.listForUser, {
+      username: owner,
+      type: "owner",
+      per_page: 100
+    }) as GithubRepoApiItem[];
+  }
+
+  return repos
+    .flatMap((repo) => {
+      const target = githubRepoFromApiItem(repo, owner);
+      return target ? [target] : [];
+    })
+    .filter((repo) => repo.owner.toLowerCase() === owner.toLowerCase())
+    .sort((left, right) => `${left.owner}/${left.repo}`.localeCompare(`${right.owner}/${right.repo}`));
+}
+
+async function githubReposForSource(source: TaskSource, octokit: GithubClient): Promise<GithubRepoTarget[]> {
+  const repo = repoMatch(source);
+  if (repo) {
+    return [repo];
+  }
+  const owner = ownerMatch(source);
+  return owner ? githubReposForOwner(octokit, owner.owner) : [];
+}
+
+function githubRepoFromTask(source: TaskSource, task: TaskRow): GithubRepoTarget | null {
+  const issueUrlTarget = githubSourceTarget(task.url);
+  if (issueUrlTarget?.repo) {
+    return { owner: issueUrlTarget.owner, repo: issueUrlTarget.repo };
+  }
+  const repository = task.data.repository;
+  const repositoryTarget = typeof repository === "string"
+    ? githubSourceTarget(repository)
+    : repository && typeof repository === "object" && "full_name" in repository
+      ? githubSourceTarget(String((repository as { full_name?: unknown }).full_name ?? ""))
+      : null;
+  if (repositoryTarget?.repo) {
+    return { owner: repositoryTarget.owner, repo: repositoryTarget.repo };
+  }
+  const repositoryUrlTarget = typeof task.data.repository_url === "string" ? githubSourceTarget(task.data.repository_url) : null;
+  return repositoryUrlTarget?.repo
+    ? { owner: repositoryUrlTarget.owner, repo: repositoryUrlTarget.repo }
+    : repoMatch(source);
 }
 
 export async function fetchGithubIssueTasks(
@@ -352,18 +469,18 @@ export async function fetchGithubIssueTasks(
   source: TaskSource,
   account?: OnlineAccount
 ): Promise<TaskRow[]> {
-  const repo = repoMatch(source);
-  if (!repo) {
-    return [];
-  }
-
   const octokit = new Octokit(account?.token ? { auth: account.token } : {});
-  const issues = await octokit.paginate(octokit.rest.issues.listForRepo, {
-    owner: repo.owner,
-    repo: repo.repo,
-    state: "open",
-    per_page: 100
-  });
+  const repoIssues = await Promise.all(
+    (await githubReposForSource(source, octokit)).map(async (repo) => ({
+      repo,
+      issues: await octokit.paginate(octokit.rest.issues.listForRepo, {
+        owner: repo.owner,
+        repo: repo.repo,
+        state: "open",
+        per_page: 100
+      })
+    }))
+  );
 
   let rank = LexoRank.middle();
   const existingByUrl = new Map(sourceTasks(file, source.id).map((task) => [task.url, task]));
@@ -372,14 +489,18 @@ export async function fetchGithubIssueTasks(
     existingByContents.set(task.contents, [...(existingByContents.get(task.contents) ?? []), task]);
   });
 
-  return issues
+  return repoIssues.flatMap(({ repo, issues }) => issues
     .filter((issue) => !issue.pull_request)
     .flatMap((issue) => {
-      const url = issue.html_url ?? `${source.url}/issues/${issue.number}`;
+      const repository = `${repo.owner}/${repo.repo}`;
+      const url = issue.html_url ?? `${githubRepoUrl(repo)}/issues/${issue.number}`;
       const rawIssue = toJsonObject(issue);
       const issueData = {
         ...rawIssue,
-        __strata: { sourceType: "Github", rawObjectType: "github_issue" }
+        repository,
+        repository_owner: repo.owner,
+        repository_name: repo.repo,
+        __strata: { sourceType: "Github", rawObjectType: "github_issue", repository }
       };
       const issueStandard = standardTaskFields(issueData, {
         title: issue.title,
@@ -442,7 +563,7 @@ export async function fetchGithubIssueTasks(
             : childTasks[parsedChildren[index].parentIndex!]?.id
         }))
       ];
-    });
+    }));
 }
 
 async function optionalPaginated<T>(callback: () => Promise<T[]>): Promise<T[]> {
@@ -457,43 +578,49 @@ export async function fetchGithubTaskFieldMetadata(
   source: TaskSource,
   account?: OnlineAccount
 ): Promise<TaskFieldMetadata[]> {
-  const repo = repoMatch(source);
-  if (!repo) {
+  const octokit = new Octokit(account?.token ? { auth: account.token } : {});
+  const repos = await githubReposForSource(source, octokit);
+  if (repos.length === 0) {
     return [];
   }
-  const octokit = new Octokit(account?.token ? { auth: account.token } : {});
-  const [labels, assignees, milestones, issueTypes, issueFields] = await Promise.all([
-    optionalPaginated(() => octokit.paginate(octokit.rest.issues.listLabelsForRepo, {
-      owner: repo.owner,
-      repo: repo.repo,
-      per_page: 100
-    })),
-    optionalPaginated(() => octokit.paginate(octokit.rest.issues.listAssignees, {
-      owner: repo.owner,
-      repo: repo.repo,
-      per_page: 100
-    })),
-    optionalPaginated(() => octokit.paginate(octokit.rest.issues.listMilestones, {
-      owner: repo.owner,
-      repo: repo.repo,
-      state: "all",
-      per_page: 100
-    })),
-    optionalPaginated(() => octokit.paginate("GET /repos/{owner}/{repo}/issue-types", {
-      owner: repo.owner,
-      repo: repo.repo,
-      per_page: 100
-    } as never) as Promise<Array<{ name?: string }>>),
-    optionalPaginated(() => octokit.paginate("GET /orgs/{org}/issue-fields", {
-      org: repo.owner,
+
+  const repoOptions = await Promise.all(repos.map(async (repo) => {
+    const [labels, assignees, milestones, issueTypes] = await Promise.all([
+      optionalPaginated(() => octokit.paginate(octokit.rest.issues.listLabelsForRepo, {
+        owner: repo.owner,
+        repo: repo.repo,
+        per_page: 100
+      })),
+      optionalPaginated(() => octokit.paginate(octokit.rest.issues.listAssignees, {
+        owner: repo.owner,
+        repo: repo.repo,
+        per_page: 100
+      })),
+      optionalPaginated(() => octokit.paginate(octokit.rest.issues.listMilestones, {
+        owner: repo.owner,
+        repo: repo.repo,
+        state: "all",
+        per_page: 100
+      })),
+      optionalPaginated(() => octokit.paginate("GET /repos/{owner}/{repo}/issue-types", {
+        owner: repo.owner,
+        repo: repo.repo,
+        per_page: 100
+      } as never) as Promise<Array<{ name?: string }>>)
+    ]);
+    return { labels, assignees, milestones, issueTypes };
+  }));
+  const issueFields = (await Promise.all(
+    uniqueText(repos.map((repo) => repo.owner)).map((org) => optionalPaginated(() => octokit.paginate("GET /orgs/{org}/issue-fields", {
+      org,
       per_page: 100
     } as never) as Promise<Array<{
       id?: number;
       name?: string;
       data_type?: string;
       options?: Array<{ name?: string }>;
-    }>>)
-  ]);
+    }>>))
+  )).flat();
 
   const baseFields: TaskFieldMetadata[] = [
     { sourceId: source.id, path: "title", label: "Title", type: "string", editable: true, updateKind: "github_issue" },
@@ -506,7 +633,7 @@ export async function fetchGithubTaskFieldMetadata(
       label: "Labels",
       type: "multiselect",
       editable: true,
-      options: labels.map((label) => label.name).filter((name): name is string => Boolean(name)),
+      options: uniqueText(repoOptions.flatMap((options) => options.labels.map((label) => label.name))),
       updateKind: "github_issue"
     },
     {
@@ -515,7 +642,7 @@ export async function fetchGithubTaskFieldMetadata(
       label: "Assignees",
       type: "multiselect",
       editable: true,
-      options: assignees.map((assignee) => assignee.login).filter((name): name is string => Boolean(name)),
+      options: uniqueText(repoOptions.flatMap((options) => options.assignees.map((assignee) => assignee.login))),
       updateKind: "github_issue"
     },
     {
@@ -524,7 +651,7 @@ export async function fetchGithubTaskFieldMetadata(
       label: "Milestone",
       type: "select",
       editable: true,
-      options: milestones.map((milestone) => milestone.title).filter((name): name is string => Boolean(name)),
+      options: uniqueText(repoOptions.flatMap((options) => options.milestones.map((milestone) => milestone.title))),
       updateKind: "github_issue"
     },
     {
@@ -533,29 +660,34 @@ export async function fetchGithubTaskFieldMetadata(
       label: "Issue Type",
       type: "select",
       editable: true,
-      options: issueTypes.map((type) => type.name).filter((name): name is string => Boolean(name)),
+      options: uniqueText(repoOptions.flatMap((options) => options.issueTypes.map((type) => type.name))),
       updateKind: "github_issue"
     }
   ];
 
-  const customFields = issueFields.map<TaskFieldMetadata>((field) => ({
-    sourceId: source.id,
-    path: `issue_field_values.${field.name ?? field.id}`,
-    label: field.name ?? `Field ${field.id}`,
-    type: field.data_type === "number"
-      ? "number"
-      : field.data_type === "date"
-        ? "datetime"
-        : field.data_type === "single_select"
-          ? "select"
-          : field.data_type === "multi_select"
-            ? "multiselect"
-            : "string",
-    editable: true,
-    options: field.options?.map((option) => option.name).filter((name): name is string => Boolean(name)),
-    fieldId: field.id,
-    updateKind: "github_issue_field"
-  }));
+  const customFields = [...issueFields.reduce<Map<string, TaskFieldMetadata>>((fields, field) => {
+    const path = `issue_field_values.${field.name ?? field.id}`;
+    const existing = fields.get(path);
+    fields.set(path, {
+      sourceId: source.id,
+      path,
+      label: field.name ?? `Field ${field.id}`,
+      type: field.data_type === "number"
+        ? "number"
+        : field.data_type === "date"
+          ? "datetime"
+          : field.data_type === "single_select"
+            ? "select"
+            : field.data_type === "multi_select"
+              ? "multiselect"
+              : "string",
+      editable: true,
+      options: uniqueText([...(existing?.options ?? []), ...(field.options?.map((option) => option.name) ?? [])]),
+      fieldId: existing?.fieldId ?? field.id,
+      updateKind: "github_issue_field"
+    });
+    return fields;
+  }, new Map()).values()];
 
   return [...baseFields, ...customFields];
 }
@@ -637,7 +769,7 @@ export async function updateGithubTaskField(
   value: MetadataValue,
   account?: OnlineAccount
 ): Promise<void> {
-  const repo = repoMatch(source);
+  const repo = githubRepoFromTask(source, task);
   const number = issueNumber(task);
   const rawObjectType = task.data.__strata && typeof task.data.__strata === "object"
     ? (task.data.__strata as { rawObjectType?: string }).rawObjectType
@@ -703,7 +835,7 @@ export async function createGithubTask(
 ): Promise<void> {
   const repo = repoMatch(source);
   if (!repo) {
-    throw new Error("GitHub task source URL must be a repository URL.");
+    throw new Error("New GitHub tasks must be created from a repository task source.");
   }
   const octokit = new Octokit(account?.token ? { auth: account.token } : {});
   const response = await octokit.rest.issues.create({
@@ -759,9 +891,9 @@ export async function deleteGithubTask(
   tasks: TaskRow[],
   account?: OnlineAccount
 ): Promise<void> {
-  const repo = repoMatch(source);
+  const repo = githubRepoFromTask(source, task);
   if (!repo) {
-    throw new Error("GitHub task source URL must be a repository URL.");
+    throw new Error("GitHub task repository could not be found.");
   }
   const octokit = new Octokit(account?.token ? { auth: account.token } : {});
   const rawObjectType = task.data.__strata && typeof task.data.__strata === "object"
