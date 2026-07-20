@@ -35,6 +35,24 @@ export class CSDBDatabase {
     return this.execute({ kind: "create-table", schema }) as { rowsAffected: number };
   }
 
+  getTableComment(tableName: string, key: string): unknown {
+    return this.document.tables.get(tableName)?.schema.comments?.[key];
+  }
+
+  setTableComment(tableName: string, key: string, value: unknown): void {
+    const table = this.document.tables.get(tableName);
+    if (!table) {
+      return;
+    }
+    const comments = { ...(table.schema.comments ?? {}) };
+    if (value === undefined) {
+      delete comments[key];
+    } else {
+      comments[key] = value;
+    }
+    table.schema.comments = comments;
+  }
+
   dropTable(name: string): { rowsAffected: number } {
     return this.execute({ kind: "drop-table", table: name }) as { rowsAffected: number };
   }

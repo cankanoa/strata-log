@@ -316,12 +316,14 @@ export function FilesPage() {
   return (
     <main className={cn("flex h-screen min-h-0 w-full min-w-0 flex-col", empty ? "bg-[var(--app-shell-background)]" : "bg-background")}>
       <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", empty ? "bg-[var(--app-shell-background)]" : "bg-background")}>
-        <div className="flex min-h-12 items-center justify-between gap-3 border-b border-border/70 px-4">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold">{loaded ? fileNameOf(loaded.path) : "Files"}</div>
-            {loaded ? <div className="truncate text-xs text-muted-foreground">{loaded.path}</div> : null}
+        {loaded ? (
+          <div className="flex min-h-12 items-center justify-between gap-3 border-b border-border/70 px-4">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">{fileNameOf(loaded.path)}</div>
+              <div className="truncate text-xs text-muted-foreground">{loaded.path}</div>
+            </div>
           </div>
-        </div>
+        ) : null}
         {loaded?.mode === "markdown" ? (
           <MarkdownEditor
             key={loaded.path}

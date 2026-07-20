@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { formatDuration, formatDurationWithSeconds, getRunningEntry, netDurationMs } from "@/lib/time";
 import { activeTaskDisplayRows } from "@/lib/task-query";
 import { FileSidebarBrowser } from "@/components/task/task-sidebar-browser";
+import { defaultGeneralSettings } from "@/lib/defaults";
 import { DatabaseReferenceSyncDialog } from "@/features/database/database-reference-sync-dialog";
 import { getMissingDatabaseReferences, removeDatabaseReferences, type DatabaseReferenceStatus } from "@/lib/database-registry-sync";
 import { getActiveDatabaseEntry, parseDatabaseRegistry } from "@/lib/database-registry";
@@ -127,7 +128,7 @@ export default function App() {
     () => (file?.taskSources ?? []).filter((source) => source.type !== "Internal Task").map((source) => source.id),
     [file?.taskSources]
   );
-  const refreshRateSeconds = file?.settings?.refreshRateSeconds ?? 0;
+  const refreshRateSeconds = file?.settings?.refreshRateSeconds ?? defaultGeneralSettings.refreshRateSeconds;
   const githubSourceKey = useMemo(
     () => (file?.taskSources ?? [])
       .filter((source) => source.type === "Github")

@@ -354,7 +354,7 @@ comments: {}
 
 --- table:settings:data
 key,value_json
-refresh_rate_seconds,0
+refresh_rate_seconds,60
 task_field_metadata,{}
 
 --- table:accounts:schema
@@ -382,4 +382,3 @@ comments: {}
 
 --- table:accounts:data
 id,type,name,username,token
-

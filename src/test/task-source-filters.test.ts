@@ -66,4 +66,31 @@ describe("task source track filters", () => {
       "internal-source"
     ]);
   });
+
+  it("matches GitHub owner tasks by expanded repository values", () => {
+    const ownerSource: TaskSource = {
+      id: "github-owner",
+      type: "Github",
+      url: "acme",
+      repositoryUrls: ["acme/api", "acme/site"]
+    };
+    const ownerFile: TimeLogFile = {
+      ...file,
+      taskSources: [ownerSource],
+      tasks: [
+        {
+          ...task("api", ownerSource),
+          url: "https://github.com/acme/api/issues/1",
+          data: { repository: "acme/api" }
+        },
+        {
+          ...task("site", ownerSource),
+          url: "https://github.com/acme/site/issues/2",
+          data: { repository: "acme/site" }
+        }
+      ]
+    };
+
+    expect(filterTaskDisplayRowsBySourceUrls(ownerFile, taskDisplayRows(ownerFile), new Set(["acme/site"])).map((row) => row.contents)).toEqual(["site"]);
+  });
 });

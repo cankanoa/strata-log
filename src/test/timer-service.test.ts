@@ -95,6 +95,26 @@ describe("CSDB services", () => {
     expect(parsed.file?.entries[0]?.intervals?.[0]?.metadata).toEqual({});
   });
 
+  it("round-trips GitHub owner repositories in the task sources table comment", () => {
+    const raw = serializeTimeLogYaml({
+      ...baseFile,
+      taskSources: [
+        {
+          id: "550e8400-e29b-41d4-a716-446655440100",
+          type: "Github",
+          url: "acme",
+          repositoryUrls: ["acme/site", "acme/api"]
+        }
+      ]
+    });
+
+    expect(raw).toContain("github_repositories");
+    const parsed = parseTimeLogYaml(raw);
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.file?.taskSources[0]?.repositoryUrls).toEqual(["acme/api", "acme/site"]);
+  });
+
   it("accepts generic file search glob values", () => {
     const validation = validateFile({
       ...baseFile,

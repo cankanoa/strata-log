@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { taskSourceCreationChoices, taskSourceCreationGroups } from "@/lib/task-query";
 import type { TaskSource, TimeLogFile } from "@/lib/types";
 
 const githubMock = vi.hoisted(() => {
@@ -28,7 +29,7 @@ vi.mock("@octokit/rest", () => ({
   }))
 }));
 
-const { fetchGithubIssueTasks } = await import("@/lib/task-sync");
+const { fetchGithubIssueTasks, isGithubAuthError } = await import("@/lib/task-sync");
 
 const source: TaskSource = {
   id: "550e8400-e29b-41d4-a716-446655440100",
@@ -87,5 +88,59 @@ describe("GitHub owner task sources", () => {
       "https://github.com/acme/site/issues/2"
     ]);
     expect(tasks.map((task) => task.data.repository)).toEqual(["acme/api", "acme/site"]);
+  });
+
+  it("uses expanded repos as GitHub task creation choices", () => {
+    expect(taskSourceCreationChoices([{ ...source, repositoryUrls: ["acme/site", "acme/api"] }])).toMatchObject([
+      { id: `${source.id}:acme/api`, label: "acme/api", targetUrl: "acme/api" },
+      { id: `${source.id}:acme/site`, label: "acme/site", targetUrl: "acme/site" }
+    ]);
+    expect(taskSourceCreationGroups([{ ...source, repositoryUrls: ["acme/site", "acme/api"] }])).toMatchObject([
+      {
+        id: source.id,
+        label: "acme",
+        nested: true,
+        choices: [
+          { id: `${source.id}:acme/api`, label: "acme/api", targetUrl: "acme/api" },
+          { id: `${source.id}:acme/site`, label: "acme/site", targetUrl: "acme/site" }
+        ]
+      }
+    ]);
+  });
+
+  it("does not treat forbidden public API responses as token-required auth", () => {
+    const error = new Error("Forbidden") as Error & { status: number };
+    error.status = 403;
+
+    expect(isGithubAuthError(error)).toBe(false);
+  });
+
+  it("falls back to public user repos when the org endpoint is forbidden", async () => {
+    githubMock.paginate.mockImplementation(async (endpoint, params: { owner?: string; repo?: string; username?: string }) => {
+      if (endpoint === githubMock.endpoints.listForOrg) {
+        const error = new Error("Forbidden") as Error & { status: number };
+        error.status = 403;
+        throw error;
+      }
+      if (endpoint === githubMock.endpoints.listForUser) {
+        return [{ name: "public-repo", full_name: `${params.username}/public-repo`, owner: { login: params.username } }];
+      }
+      if (endpoint === githubMock.endpoints.listForRepo) {
+        return [{
+          number: 7,
+          title: "public issue",
+          html_url: `https://github.com/${params.owner}/${params.repo}/issues/7`,
+          state: "open",
+          updated_at: "2026-07-19T12:00:00Z",
+          body: ""
+        }];
+      }
+      return [];
+    });
+
+    const tasks = await fetchGithubIssueTasks(baseFile, source);
+
+    expect(githubMock.paginate).toHaveBeenCalledWith(githubMock.endpoints.listForUser, expect.objectContaining({ username: "acme" }));
+    expect(tasks.map((task) => task.url)).toEqual(["https://github.com/acme/public-repo/issues/7"]);
   });
 });

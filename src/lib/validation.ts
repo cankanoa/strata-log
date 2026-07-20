@@ -94,6 +94,7 @@ const taskSourceSchema: z.ZodType<TaskSource> = z.object({
   name: z.string().optional(),
   accountId: z.string().uuid().optional(),
   columnNames: z.array(z.string()).optional(),
+  repositoryUrls: z.array(z.string()).optional(),
   lastUpdatedAt: z.string().optional()
 });
 

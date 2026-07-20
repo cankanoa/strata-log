@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
-import { Circle, CircleCheck, CircleMinus, Download, FilePlus, Link, Pencil, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
+import { Circle, CircleCheck, CircleMinus, Download, FilePlus, Link, Pencil, Plus, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { AttributeReferenceOptionsDialog } from "@/features/database/attribute-reference-options-dialog";
 import { DatabaseReferenceSyncDialog } from "@/features/database/database-reference-sync-dialog";
@@ -44,6 +44,7 @@ import { getPlatformApi } from "@/lib/platform";
 import type { AttributeReferenceGroup, FieldDefinition, MetadataValue, TimeLogFile } from "@/lib/types";
 import { serializeTimeLogYaml } from "@/lib/yaml";
 import { Button } from "@/components/ui/button";
+import { SyncButton } from "@/components/ui/sync-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -473,6 +474,7 @@ export function DatabaseSection({ sections = ["sources", "track"] }: { sections?
   const [databaseDraftLocation, setDatabaseDraftLocation] = useState<DatabaseLocation>("Internal");
   const [databaseDraftUrl, setDatabaseDraftUrl] = useState("");
   const [databaseTemplateId, setDatabaseTemplateId] = useState("blank");
+  const [syncingDatabaseReferences, setSyncingDatabaseReferences] = useState(false);
   const regularFields = useMemo(() => getMetadataFields(file?.fields ?? {}), [file]);
   const groupFieldTypes = useMemo(() => fieldTypeOptions.filter((option) => option !== "attribute_reference"), []);
 
@@ -549,6 +551,15 @@ export function DatabaseSection({ sections = ["sources", "track"] }: { sections?
     setMissingDatabaseReferences(missing);
     if (missing.length === 0) {
       toast.success("Database references are synced.");
+    }
+  }
+
+  async function syncManagedDatabaseReferencesWithState() {
+    setSyncingDatabaseReferences(true);
+    try {
+      await syncManagedDatabaseReferences();
+    } finally {
+      setSyncingDatabaseReferences(false);
     }
   }
 
@@ -1155,10 +1166,9 @@ export function DatabaseSection({ sections = ["sources", "track"] }: { sections?
         <CardHeader className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <CardTitle>Manage Databases</CardTitle>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={(event) => runButtonAction(event, syncManagedDatabaseReferences)}>
-              <RefreshCw className="size-4" />
+            <SyncButton type="button" variant="outline" size="sm" syncing={syncingDatabaseReferences} onClick={(event) => runButtonAction(event, syncManagedDatabaseReferencesWithState)}>
               Sync
-            </Button>
+            </SyncButton>
             <Button type="button" variant="outline" size="sm" onClick={(event) => runButtonAction(event, importManagedDatabase)}>
               <Upload className="size-4" />
               Import

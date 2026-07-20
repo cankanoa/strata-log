@@ -20,6 +20,7 @@ import {
   createMarkdownTaskText,
   deleteGithubTask,
   deleteMarkdownTaskText,
+  fetchGithubTaskSourceRepositories,
   fetchGithubTaskFieldMetadata,
   fetchGithubIssueTasks,
   isGithubAuthError,
@@ -27,6 +28,7 @@ import {
   updateGithubTaskField,
   updateMarkdownTaskText
 } from "@/lib/task-sync";
+import { githubSourceForRepository } from "@/lib/github-task-sources";
 import { defaultGeneralSettings } from "@/lib/defaults";
 import { toIsoWithOffset } from "@/lib/time";
 import type {
@@ -105,13 +107,14 @@ type StoreState = AppSnapshot & {
   updateActiveTasks: (activeTasks: ActiveTaskReference[]) => Promise<boolean>;
   createTask: (input: {
     sourceId: string;
+    sourceUrl?: string;
     values: Record<string, MetadataValue>;
     active?: boolean;
   }) => Promise<boolean>;
   deleteTask: (taskId: string) => Promise<boolean>;
   updateTaskField: (taskId: string, field: TaskFieldMetadata, value: MetadataValue) => Promise<boolean>;
   updateAccounts: (accounts: OnlineAccount[]) => Promise<boolean>;
-  syncTaskSource: (sourceId: string, githubToken?: string) => Promise<{ ok: boolean; authRequired?: boolean }>;
+  syncTaskSource: (sourceId: string) => Promise<{ ok: boolean }>;
   startLiveEntry: (metadata: SessionMetadata) => Promise<boolean>;
   startLiveEntryAt: (metadata: SessionMetadata, start: string) => Promise<boolean>;
   stopLiveEntry: () => Promise<void>;
@@ -779,9 +782,10 @@ export const useAppStore = create<StoreState>((set, get) => ({
         );
         next = await reloadTaskSource(current, source, handlePath);
       } else {
+        const taskSource = input.sourceUrl ? githubSourceForRepository(source, input.sourceUrl) : source;
         const fieldMetadata = current.settings?.taskFieldMetadata[source.id] ?? [];
         await createGithubTask(
-          source,
+          taskSource,
           { title, status: input.values.status ?? true, ...input.values },
           fieldMetadata,
           current.accounts.find((account) => account.id === source.accountId)
@@ -942,7 +946,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
     return true;
   },
 
-  async syncTaskSource(sourceId, githubToken) {
+  async syncTaskSource(sourceId) {
     const current = get().file;
     if (!current) {
       set({ errors: ["Open a file before syncing task sources."] });
@@ -959,29 +963,13 @@ export const useAppStore = create<StoreState>((set, get) => ({
 
     let workingFile = current;
     let workingSource = source;
-    if (source.type === "Github" && githubToken?.trim()) {
-      const account: OnlineAccount = {
-        id: source.accountId ?? uuidv4(),
-        type: "Github",
-        name: source.url.replace(/^https:\/\/github\.com\//i, ""),
-        token: githubToken.trim()
-      };
-      const accounts = [
-        ...workingFile.accounts.filter((candidate) => candidate.id !== account.id),
-        account
-      ];
-      const sources = workingFile.taskSources.map((candidate) =>
-        candidate.id === source.id ? { ...candidate, accountId: account.id } : candidate
-      );
-      workingFile = TimeLogDatabase.setTaskSources(TimeLogDatabase.setAccounts(workingFile, accounts), sources);
-      workingSource = sources.find((candidate) => candidate.id === source.id) ?? source;
-    }
 
     try {
       const api = getPlatformApi();
       const handlePath = get().fileHandle?.path;
       let sourceLastUpdatedAt = workingSource.lastUpdatedAt;
       let nextSettings = workingFile.settings ?? defaultGeneralSettings;
+      let sourceChanged = false;
       const tasks = workingSource.type === "Markdown"
         ? await (async () => {
             const markdownPaths = (await api.listFiles(
@@ -1008,6 +996,9 @@ export const useAppStore = create<StoreState>((set, get) => ({
           })()
         : await (async () => {
             const account = workingFile.accounts.find((candidate) => candidate.id === workingSource.accountId);
+            const resolvedSource = await fetchGithubTaskSourceRepositories(workingSource, account);
+            sourceChanged = JSON.stringify(resolvedSource.repositoryUrls ?? []) !== JSON.stringify(workingSource.repositoryUrls ?? []);
+            workingSource = resolvedSource;
             const [fieldMetadata, githubTasks] = await Promise.all([
               fetchGithubTaskFieldMetadata(workingSource, account),
               fetchGithubIssueTasks(
@@ -1024,14 +1015,19 @@ export const useAppStore = create<StoreState>((set, get) => ({
               }
             };
             sourceLastUpdatedAt = latestIso(githubTasks.map((task) => task.updatedAt));
-            if (!isNewerThan(sourceLastUpdatedAt, workingSource.lastUpdatedAt)) {
+            if (!sourceChanged && !isNewerThan(sourceLastUpdatedAt, source.lastUpdatedAt)) {
               return null;
             }
             return githubTasks;
           })();
       if (tasks === null) {
-        if (settingsChanged(workingFile.settings, nextSettings)) {
-          const next = TimeLogDatabase.setSettings(workingFile, nextSettings);
+        if (settingsChanged(workingFile.settings, nextSettings) || sourceChanged) {
+          const next = TimeLogDatabase.setTaskSources(
+            TimeLogDatabase.setSettings(workingFile, nextSettings),
+            workingFile.taskSources.map((candidate) =>
+              candidate.id === sourceId ? workingSource : candidate
+            )
+          );
           const validation = validateFile(next);
           if (validation.file) {
             set({ file: validation.file, hasUnsavedChanges: true, errors: [] });
@@ -1043,7 +1039,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
       workingFile = TimeLogDatabase.setTaskSources(
         TimeLogDatabase.setSettings(workingFile, nextSettings),
         workingFile.taskSources.map((candidate) =>
-          candidate.id === sourceId ? { ...candidate, lastUpdatedAt: sourceLastUpdatedAt } : candidate
+          candidate.id === sourceId ? { ...workingSource, lastUpdatedAt: sourceLastUpdatedAt } : candidate
         )
       );
       const next = TimeLogDatabase.replaceTasksForSource(workingFile, sourceId, tasks);
@@ -1058,7 +1054,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
     } catch (error) {
       if (workingSource.type === "Github" && isGithubAuthError(error)) {
         set({ errors: ["GitHub needs an account token for this task source."] });
-        return { ok: false, authRequired: true };
+        return { ok: false };
       }
       set({ errors: [error instanceof Error ? error.message : "Task source sync failed."] });
       return { ok: false };

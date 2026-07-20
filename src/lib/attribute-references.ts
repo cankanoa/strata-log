@@ -12,22 +12,25 @@ import {
   serializeFieldOption,
   type ParsedFieldOption
 } from "@/lib/metadata";
+import { githubRepoSlugsForSource } from "@/lib/github-task-sources";
 import { taskSourceLabel } from "@/lib/task-query";
 import type { AttributeReferenceGroup, EntryInterval, FieldDefinition, MetadataValue, SessionMetadata, TimeLogFile } from "@/lib/types";
 
 export function getTaskSourceFieldOptions(file: TimeLogFile | null | undefined): ParsedFieldOption[] {
   const seen = new Set<string>();
   return (file?.taskSources ?? []).flatMap((source) => {
-    const value = source.url.trim();
-    if (!value || seen.has(value)) {
-      return [];
-    }
-    seen.add(value);
-    return [{
-      display: taskSourceLabel(source),
-      value,
-      raw: `task-source:${source.id}`
-    }];
+    const values = source.type === "Github" ? githubRepoSlugsForSource(source) : [source.url.trim()];
+    return values.flatMap((value) => {
+      if (!value || seen.has(value)) {
+        return [];
+      }
+      seen.add(value);
+      return [{
+        display: source.type === "Github" ? value : taskSourceLabel(source),
+        value,
+        raw: `task-source:${source.id}:${value}`
+      }];
+    });
   });
 }
 

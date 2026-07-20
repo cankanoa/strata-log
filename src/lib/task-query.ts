@@ -1,5 +1,20 @@
 import { INTERNAL_TASK_TITLE_COLUMN_NAME } from "@/lib/internal-tasks";
+import { githubOwnerTarget, githubRepoSlugsForSource, githubRepoTarget, githubRepositorySlugFromTask } from "@/lib/github-task-sources";
 import type { ActiveTaskReference, MetadataValue, TaskDisplayRow, TaskRow, TaskSource, TimeLogFile } from "@/lib/types";
+
+export type TaskSourceChoice = {
+  id: string;
+  source: TaskSource;
+  label: string;
+  targetUrl?: string;
+};
+
+export type TaskSourceChoiceGroup = {
+  id: string;
+  label: string;
+  nested: boolean;
+  choices: TaskSourceChoice[];
+};
 
 export function taskSourceLabel(source: TaskSource | undefined): string {
   if (!source) {
@@ -15,6 +30,37 @@ export function taskSourceLabel(source: TaskSource | undefined): string {
     return "Internal Task";
   }
   return source.url;
+}
+
+export function taskSourceLabelForTask(source: TaskSource | undefined, task: TaskRow): string {
+  if (!source) {
+    return "Unknown";
+  }
+  return source.type === "Github"
+    ? githubRepositorySlugFromTask(source, task) ?? taskSourceLabel(source)
+    : taskSourceLabel(source);
+}
+
+export function taskSourceCreationChoices(sources: TaskSource[]): TaskSourceChoice[] {
+  return taskSourceCreationGroups(sources).flatMap((group) => group.choices);
+}
+
+export function taskSourceCreationGroups(sources: TaskSource[]): TaskSourceChoiceGroup[] {
+  return sources.flatMap<TaskSourceChoiceGroup>((source) => {
+    if (source.type !== "Github") {
+      const choice: TaskSourceChoice = { id: source.id, source, label: taskSourceLabel(source) };
+      return [{ id: source.id, label: choice.label, nested: false, choices: [choice] }];
+    }
+    const choices: TaskSourceChoice[] = githubRepoSlugsForSource(source).map((repo) => ({
+      id: `${source.id}:${repo}`,
+      source,
+      targetUrl: repo,
+      label: repo
+    }));
+    return githubOwnerTarget(source.url) && !githubRepoTarget(source.url)
+      ? [{ id: source.id, label: taskSourceLabel(source), nested: true, choices }]
+      : choices.map((choice) => ({ id: choice.id, label: choice.label, nested: false, choices: [choice] }));
+  });
 }
 
 export function taskReferenceKey(reference: ActiveTaskReference): string {

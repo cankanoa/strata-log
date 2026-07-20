@@ -33,6 +33,7 @@ export type TaskSource = {
   name?: string;
   accountId?: string;
   columnNames?: string[];
+  repositoryUrls?: string[];
   lastUpdatedAt?: string;
 };
 

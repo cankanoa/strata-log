@@ -2,7 +2,7 @@ import { BUILTIN_FIELD_DEFINITIONS } from "@/lib/metadata";
 import type { GeneralSettings, TimeLogFile } from "@/lib/types";
 
 export const defaultGeneralSettings: GeneralSettings = {
-  refreshRateSeconds: 0,
+  refreshRateSeconds: 60,
   taskFieldMetadata: {}
 };
 

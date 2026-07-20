@@ -19,6 +19,8 @@ import {
   normalizeInternalTaskSources,
   sanitizeInternalTaskValues
 } from "@/lib/internal-tasks";
+import { githubOwnerTarget, normalizeGithubRepoSlugs } from "@/lib/github-task-sources";
+import { readTaskSourceRepositoryComment, writeTaskSourceRepositoryComment } from "@/lib/task-source-comments";
 import { defaultGeneralSettings } from "@/lib/defaults";
 import type { ActiveTaskReference, AttributeReferenceGroup, EntryInterval, FieldDefinition, GeneralSettings, InternalTaskRow, MetadataValue, OnlineAccount, SessionMetadata, SessionPreset, TaskFieldMetadata, TaskRow, TaskSource, TimeInterval, TimeLogFile } from "@/lib/types";
 import { validateFile } from "@/lib/validation";
@@ -514,15 +516,24 @@ function parseEntries(db: CSDBDatabase, fields: Record<string, FieldDefinition>)
 }
 
 function parseTaskSources(db: CSDBDatabase): TaskSource[] {
-  return tableRows(db, "task_sources").map((row) => ({
-    id: asString(row.id),
-    name: asString(row.name) || undefined,
-    type: asString(row.type) === "Github" ? "Github" : asString(row.type) === "Internal Task" ? "Internal Task" : "Markdown",
-    url: asString(row.url),
-    accountId: asString(row.account_id) || undefined,
-    columnNames: parseStringArrayJsonText(row.column_names_json),
-    lastUpdatedAt: asString(row.last_updated_at) || undefined
-  }));
+  const repositoriesBySourceUrl = readTaskSourceRepositoryComment(db);
+  return tableRows(db, "task_sources").map((row) => {
+    const url = asString(row.url);
+    const repositoryUrls = normalizeGithubRepoSlugs(
+      repositoriesBySourceUrl[url.trim()] ?? [],
+      githubOwnerTarget(url)?.owner
+    );
+    return {
+      id: asString(row.id),
+      name: asString(row.name) || undefined,
+      type: asString(row.type) === "Github" ? "Github" : asString(row.type) === "Internal Task" ? "Internal Task" : "Markdown",
+      url,
+      accountId: asString(row.account_id) || undefined,
+      columnNames: parseStringArrayJsonText(row.column_names_json),
+      repositoryUrls: repositoryUrls.length > 0 ? repositoryUrls : undefined,
+      lastUpdatedAt: asString(row.last_updated_at) || undefined
+    };
+  });
 }
 
 function parseTasks(db: CSDBDatabase): TaskRow[] {
@@ -689,6 +700,7 @@ export function buildDatabaseFromFile(file: TimeLogFile): CSDBDatabase {
   const normalizedFile = normalizeFileForStorage(file);
 
   const db = createDatabase();
+  writeTaskSourceRepositoryComment(db, normalizedFile.taskSources);
   const fieldRows: Row[] = [];
   const groupRows: Row[] = [];
   const presetRows: Row[] = normalizedFile.sessionPresets.map((preset) => ({

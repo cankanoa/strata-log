@@ -1,4 +1,5 @@
 import { getActiveMetadataFields } from "@/lib/attribute-references";
+import { githubRepositorySlugFromTask } from "@/lib/github-task-sources";
 import type { MetadataValue, SessionMetadata, TaskDisplayRow, TimeLogFile } from "@/lib/types";
 
 function metadataStrings(value: MetadataValue): string[] {
@@ -22,6 +23,11 @@ export function filterTaskDisplayRowsBySourceUrls(
   rows: TaskDisplayRow[],
   selectedUrls: Set<string>
 ): TaskDisplayRow[] {
-  const sourceUrlsById = new Map(file.taskSources.map((source) => [source.id, source.url.trim()]));
-  return rows.filter((task) => selectedUrls.has(sourceUrlsById.get(task.sourceId) ?? ""));
+  const sourcesById = new Map(file.taskSources.map((source) => [source.id, source]));
+  return rows.filter((task) => {
+    const source = sourcesById.get(task.sourceId);
+    const sourceUrl = source?.url.trim() ?? "";
+    const repository = source?.type === "Github" ? githubRepositorySlugFromTask(source, task) : undefined;
+    return selectedUrls.has(sourceUrl) || Boolean(repository && selectedUrls.has(repository));
+  });
 }

@@ -1,13 +1,16 @@
-import { useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { Fragment, useMemo, useState, type Dispatch, type DragEvent, type ReactNode, type SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowDown,
   ArrowDownWideNarrow,
   ArrowUp,
+  Check,
   ChevronDown,
   ChevronRight,
   Columns3Cog,
   Filter,
+  GripVertical,
+  Group as GroupIcon,
   LayoutList,
   Pencil,
   Plus,
@@ -15,9 +18,18 @@ import {
   X
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SyncButton } from "@/components/ui/sync-button";
 import { MarkdownValueDialog } from "@/components/forms/markdown-value-dialog";
 import { MetadataValueDialog } from "@/features/database/metadata-value-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -25,7 +37,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getFieldSelection } from "@/lib/metadata";
 import { INTERNAL_TASK_BODY_COLUMN_NAME, INTERNAL_TASK_STATUS_COLUMN_NAME, INTERNAL_TASK_TITLE_COLUMN_NAME } from "@/lib/internal-tasks";
-import { taskDisplayRows, taskReferenceKey, taskSourceLabel } from "@/lib/task-query";
+import { taskDisplayRows, taskReferenceKey, taskSourceCreationGroups, taskSourceLabelForTask, type TaskSourceChoice } from "@/lib/task-query";
 import { filterTaskDisplayRowsBySourceUrls, getTrackTaskSourceFilterUrls } from "@/lib/task-source-filters";
 import type { ActiveTaskReference, FieldDefinition, MetadataValue, TaskDisplayRow, TaskFieldMetadata, TaskSource } from "@/lib/types";
 import { useAppStore } from "@/store/app-store";
@@ -82,11 +94,23 @@ type SortState = {
   enabled: boolean;
 };
 
-type TaskViewMode = "small-table" | "large-table";
+type TaskViewMode = "small-table" | "large-table" | "small-kanban" | "large-kanban";
+
+type TaskRowGroup = {
+  key: string;
+  title: string;
+  value: MetadataValue;
+  unset: boolean;
+  rows: TaskTreeRow[];
+};
+
+const UNSET_GROUP_SELECT_VALUE = "__unset__";
+const UNSET_GROUP_KEY = "__unset__";
+const ALL_TASKS_GROUP_KEY = "__all_tasks__";
 
 function sortTasks(tasks: TaskDisplayRow[], sourcesById: Map<string, TaskSource>): TaskDisplayRow[] {
   return [...tasks].sort((left, right) => {
-    const sourceCompare = taskSourceLabel(sourcesById.get(left.sourceId)).localeCompare(taskSourceLabel(sourcesById.get(right.sourceId)));
+    const sourceCompare = taskSourceLabelForTask(sourcesById.get(left.sourceId), left).localeCompare(taskSourceLabelForTask(sourcesById.get(right.sourceId), right));
     return sourceCompare === 0 ? left.rank.localeCompare(right.rank) : sourceCompare;
   });
 }
@@ -177,11 +201,10 @@ function taskColumns(
         />
       )
     },
-    { id: "type", title: "Type", type: "string", defaultVisible: true, value: (task) => task.type },
+    { id: "status", title: "Status", type: "string", defaultVisible: true, value: (task) => task.status === false ? "Closed" : "Open" },
     { id: "contents", title: "Title", type: "string", defaultVisible: true, value: (task) => task.contents },
     { id: "body", title: "Body", type: "string", defaultVisible: true, value: (task) => getPathValue(task.data, "body") },
-    { id: "source", title: "Source", type: "string", defaultVisible: true, value: (task, sourcesById) => taskSourceLabel(sourcesById.get(task.sourceId)) },
-    { id: "status", title: "Status", type: "string", defaultVisible: true, value: (task) => task.status === false ? "Closed" : "Open" },
+    { id: "source", title: "Source", type: "string", defaultVisible: true, value: (task, sourcesById) => taskSourceLabelForTask(sourcesById.get(task.sourceId), task) },
     { id: "url", title: "URL", type: "string", defaultVisible: true, value: (task) => task.url },
     { id: "uuid", title: "UUID", type: "string", defaultVisible: false, value: (task) => task.id },
     { id: "parentTaskId", title: "Parent Task", type: "string", defaultVisible: false, value: (task) => task.parentTaskId },
@@ -222,6 +245,76 @@ function formatCellValue(value: unknown): string {
     return JSON.stringify(value);
   }
   return String(value);
+}
+
+function metadataValueFromUnknown(value: unknown): MetadataValue {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) =>
+      typeof item === "string" || typeof item === "number" || typeof item === "boolean" ? [item] : []
+    );
+  }
+  return JSON.stringify(value);
+}
+
+function groupValueForRow(row: TaskTreeRow, column: TaskTableColumn, sourcesById: Map<string, TaskSource>): MetadataValue {
+  if (column.id === "status") {
+    return row.task.status === false ? false : true;
+  }
+  return metadataValueFromUnknown(column.value(row.task, sourcesById));
+}
+
+function isUnsetGroupValue(value: MetadataValue): boolean {
+  return value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+}
+
+function groupTitle(column: TaskTableColumn, value: MetadataValue, unset: boolean): string {
+  if (unset) {
+    return "Unset";
+  }
+  if (column.id === "status") {
+    return value === false ? "Closed" : "Open";
+  }
+  return formatCellValue(value);
+}
+
+function groupKey(value: MetadataValue, unset: boolean): string {
+  return unset ? UNSET_GROUP_KEY : normalizeScalar(value);
+}
+
+function taskRowGroups(
+  rows: TaskTreeRow[],
+  column: TaskTableColumn | null,
+  sourcesById: Map<string, TaskSource>,
+  createUnsetGroup: boolean
+): TaskRowGroup[] {
+  if (!column) {
+    return [{ key: ALL_TASKS_GROUP_KEY, title: "Tasks", value: undefined, unset: false, rows }];
+  }
+  const groups = new Map<string, TaskRowGroup>();
+  if (createUnsetGroup) {
+    groups.set(UNSET_GROUP_KEY, { key: UNSET_GROUP_KEY, title: "Unset", value: undefined, unset: true, rows: [] });
+  }
+  rows.forEach((row) => {
+    const value = groupValueForRow(row, column, sourcesById);
+    const unset = isUnsetGroupValue(value);
+    const key = groupKey(value, unset);
+    const group = groups.get(key) ?? {
+      key,
+      title: groupTitle(column, value, unset),
+      value,
+      unset,
+      rows: []
+    };
+    group.rows.push(row);
+    groups.set(key, group);
+  });
+  return [...groups.values()];
 }
 
 function fieldMetadataToDefinition(field: TaskFieldMetadata): FieldDefinition {
@@ -1022,11 +1115,13 @@ function renderCell(column: TaskTableColumn, task: TaskDisplayRow, sourcesById: 
     return column.render(task, sourcesById);
   }
   const value = column.value(task, sourcesById);
-  if (column.id === "url" && typeof value === "string" && value.startsWith("http")) {
-    return (
-      <a className="text-primary underline-offset-4 hover:underline" href={value} target="_blank" rel="noreferrer">
+  if (column.id === "url" && typeof value === "string") {
+    return value.startsWith("http") ? (
+      <a className="text-primary underline-offset-4 hover:underline" href={value} title={value} target="_blank" rel="noreferrer">
         {value}
       </a>
+    ) : (
+      <span title={value}>{value}</span>
     );
   }
   return formatCellValue(value);
@@ -1034,13 +1129,14 @@ function renderCell(column: TaskTableColumn, task: TaskDisplayRow, sourcesById: 
 
 export function TasksPage() {
   const navigate = useNavigate();
-  const { file, trackDraftMetadata, createTask, deleteTask, updateActiveTasks, updateTaskField } = useAppStore(useShallow((state) => ({
+  const { file, trackDraftMetadata, createTask, deleteTask, updateActiveTasks, updateTaskField, syncTaskSource } = useAppStore(useShallow((state) => ({
     file: state.file,
     trackDraftMetadata: state.trackDraftMetadata,
     createTask: state.createTask,
     deleteTask: state.deleteTask,
     updateActiveTasks: state.updateActiveTasks,
-    updateTaskField: state.updateTaskField
+    updateTaskField: state.updateTaskField,
+    syncTaskSource: state.syncTaskSource
   })));
   const taskSourceFilterUrls = useMemo(
     () => file ? getTrackTaskSourceFilterUrls(file, trackDraftMetadata) : new Set<string>(),
@@ -1068,12 +1164,16 @@ export function TasksPage() {
   const [columnState, setColumnState] = useState<ColumnState[]>([]);
   const [filters, setFilters] = useState<FilterState[]>([]);
   const [sorts, setSorts] = useState<SortState[]>([]);
-  const [newTaskSourceId, setNewTaskSourceId] = useState("");
+  const [groupColumnId, setGroupColumnId] = useState<string | null>(null);
+  const [createUnsetGroup, setCreateUnsetGroup] = useState(false);
+  const [newTaskChoiceId, setNewTaskChoiceId] = useState("");
   const [newTaskValues, setNewTaskValues] = useState<Record<string, MetadataValue>>({ status: true });
   const [newTaskActive, setNewTaskActive] = useState(false);
   const [creatingTask, setCreatingTask] = useState(false);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
   const [updatingStatusTaskId, setUpdatingStatusTaskId] = useState<string | null>(null);
+  const [syncingSources, setSyncingSources] = useState(false);
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [editField, setEditField] = useState<{
     task: TaskDisplayRow;
     field: TaskFieldMetadata;
@@ -1111,12 +1211,25 @@ export function TasksPage() {
     () => applySorts(applyFilters(rows, columns, sourcesById, filters), columns, sourcesById, sorts),
     [columns, filters, rows, sorts, sourcesById]
   );
+  const groupColumn = columns.find((column) => column.id === groupColumnId) ?? null;
+  const groupedRows = useMemo(
+    () => taskRowGroups(visibleRows, groupColumn, sourcesById, createUnsetGroup),
+    [createUnsetGroup, groupColumn, sourcesById, visibleRows]
+  );
   const allExpanded = expandableIds.length > 0 && expandableIds.every((id) => expandedIds.has(id));
   const activeFilters = hasActiveFilters(filters);
   const activeSorts = hasActiveSorts(sorts);
+  const activeGroup = Boolean(groupColumn);
+  const isKanbanView = view === "small-kanban" || view === "large-kanban";
+  const compactKanban = view === "small-kanban";
   const cellClassName = view === "large-table" ? "whitespace-nowrap px-4 py-3" : undefined;
-  const newTaskSourceOptions = file?.taskSources ?? [];
-  const newTaskSource = newTaskSourceOptions.find((source) => source.id === newTaskSourceId) ?? newTaskSourceOptions[0];
+  const newTaskSourceGroups = useMemo(
+    () => taskSourceCreationGroups(file?.taskSources ?? []),
+    [file?.taskSources]
+  );
+  const newTaskSourceOptions = useMemo(() => newTaskSourceGroups.flatMap((group) => group.choices), [newTaskSourceGroups]);
+  const newTaskChoice = newTaskSourceOptions.find((choice) => choice.id === newTaskChoiceId) ?? newTaskSourceOptions[0];
+  const newTaskSource = newTaskChoice?.source;
 
   function updateColumnState(updater: (current: ColumnState[]) => ColumnState[]) {
     setColumnState(updater(syncedColumnState));
@@ -1140,7 +1253,7 @@ export function TasksPage() {
 
   function editableFieldForSource(source: TaskSource | undefined, column: TaskTableColumn): TaskFieldMetadata | null {
     const path = editablePathForColumn(column);
-    if (!path || !source || ["type", "source", "url", "uuid", "parentTaskId", "rank", "data"].includes(column.id)) {
+    if (!path || !source || ["source", "url", "uuid", "parentTaskId", "rank", "data"].includes(column.id)) {
       return null;
     }
     if (path === "status") {
@@ -1201,9 +1314,19 @@ export function TasksPage() {
     setNewTaskValues((current) => ({ ...current, [path]: value }));
   }
 
-  function changeNewTaskSource(sourceId: string) {
-    setNewTaskSourceId(sourceId);
+  function changeNewTaskSource(choiceId: string) {
+    setNewTaskChoiceId(choiceId);
     setNewTaskValues({ status: true });
+  }
+
+  function renderTaskSourceMenuItem(choice: TaskSourceChoice) {
+    const selected = choice.id === newTaskChoice?.id;
+    return (
+      <DropdownMenuItem key={choice.id} onClick={() => changeNewTaskSource(choice.id)}>
+        <span className="min-w-0 flex-1 truncate">{choice.label}</span>
+        {selected ? <Check className="size-4 text-primary" /> : null}
+      </DropdownMenuItem>
+    );
   }
 
   async function handleCreateTask() {
@@ -1213,6 +1336,7 @@ export function TasksPage() {
     setCreatingTask(true);
     const ok = await createTask({
       sourceId: newTaskSource.id,
+      sourceUrl: newTaskChoice?.targetUrl,
       values: newTaskValues,
       active: newTaskActive
     });
@@ -1239,28 +1363,51 @@ export function TasksPage() {
     setUpdatingStatusTaskId(null);
   }
 
+  async function syncTaskSources() {
+    if (!file) {
+      return;
+    }
+    setSyncingSources(true);
+    try {
+      for (const source of file.taskSources) {
+        if (source.type !== "Internal Task") {
+          await syncTaskSource(source.id);
+        }
+      }
+    } finally {
+      setSyncingSources(false);
+    }
+  }
+
   function renderCreateCell(column: TaskTableColumn): ReactNode {
     if (column.id === "active") {
       return <Switch checked={newTaskActive} onCheckedChange={setNewTaskActive} disabled={!newTaskSource} />;
     }
-    if (column.id === "type") {
-      return (
-        <Select value={newTaskSource?.id} disabled={newTaskSourceOptions.length === 0} onValueChange={(value) => value !== null && changeNewTaskSource(value)}>
-          <SelectTrigger className="w-full min-w-40">
-            <SelectTriggerText value={newTaskSource ? taskSourceLabel(newTaskSource) : undefined} placeholder="Task Source" />
-          </SelectTrigger>
-          <SelectContent>
-            {newTaskSourceOptions.map((source) => (
-              <SelectItem key={source.id} value={source.id}>
-                {taskSourceLabel(source)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      );
-    }
     if (column.id === "source") {
-      return <span className="text-muted-foreground">{newTaskSource?.type ?? "—"}</span>;
+      return (
+        <DropdownMenu>
+          <DropdownMenuTrigger render={<Button type="button" variant="outline" className="w-full min-w-40 justify-between" disabled={newTaskSourceGroups.length === 0} />}>
+            <span className={`min-w-0 truncate ${newTaskChoice ? "" : "text-muted-foreground"}`}>{newTaskChoice?.label ?? "Task Source"}</span>
+            <ChevronDown className="size-4 opacity-70" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-56">
+            {newTaskSourceGroups.map((group) =>
+              group.nested ? (
+                <DropdownMenuSub key={group.id}>
+                  <DropdownMenuSubTrigger>
+                    <span className="min-w-0 truncate">{group.label}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="min-w-56">
+                    {group.choices.length > 0
+                      ? group.choices.map((choice) => renderTaskSourceMenuItem(choice))
+                      : <DropdownMenuItem disabled>No synced repos</DropdownMenuItem>}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              ) : group.choices.map((choice) => renderTaskSourceMenuItem(choice))
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      );
     }
     if (column.id === "url") {
       return <span className="text-muted-foreground">Generated</span>;
@@ -1275,86 +1422,352 @@ export function TasksPage() {
     ) : <span className="text-muted-foreground">—</span>;
   }
 
-  return (
-    <main className="mx-auto min-h-screen w-full max-w-6xl p-5 xl:p-7">
-      <Card className="border-white/60 bg-card/90 shadow-xl shadow-amber-950/5">
-        <CardHeader className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-          <CardTitle>Tasks</CardTitle>
-          <div className="flex flex-wrap gap-2">
-            <Popover>
-              <PopoverTrigger render={<Button type="button" variant="outline" />}>
-                <LayoutList className="size-4" />
-                View
-              </PopoverTrigger>
-              <PopoverContent align="end" className="w-44">
-                <Button type="button" size="sm" variant={view === "small-table" ? "secondary" : "outline"} onClick={() => setView("small-table")}>
-                  Small Table
-                </Button>
-                <Button type="button" size="sm" variant={view === "large-table" ? "secondary" : "outline"} onClick={() => setView("large-table")}>
-                  Large Table
-                </Button>
-              </PopoverContent>
-            </Popover>
+  function groupingFieldForTask(task: TaskDisplayRow, column: TaskTableColumn): TaskFieldMetadata | null {
+    const source = sourcesById.get(task.sourceId);
+    if (!source) {
+      return null;
+    }
+    if (column.id === "status") {
+      return statusFieldForSource(source);
+    }
+    return editableFieldFor(task, column);
+  }
 
-            <Popover>
-              <PopoverTrigger render={<Button type="button" variant="outline" />}>
-                <Columns3Cog className="size-4" />
-                Fields
-              </PopoverTrigger>
-              <PopoverContent align="end" className="max-h-[70vh] w-80 overflow-y-auto">
-                {syncedColumnState.map((state, index) => {
-                  const column = columns.find((candidate) => candidate.id === state.id);
-                  if (!column) {
-                    return null;
-                  }
-                  return (
-                    <div key={state.id} className="flex items-center gap-2">
-                      <Switch
-                        checked={state.visible}
-                        onCheckedChange={(visible) =>
-                          updateColumnState((current) =>
-                            current.map((entry) => entry.id === state.id ? { ...entry, visible } : entry)
-                          )
-                        }
-                      />
-                      <Button type="button" variant="ghost" size="icon-sm" disabled={index === 0} onClick={() => updateColumnState((current) => moveColumn(current, state.id, -1))}>
-                        <ArrowUp className="size-4" />
-                      </Button>
-                      <Button type="button" variant="ghost" size="icon-sm" disabled={index === syncedColumnState.length - 1} onClick={() => updateColumnState((current) => moveColumn(current, state.id, 1))}>
-                        <ArrowDown className="size-4" />
-                      </Button>
-                      <span className="min-w-0 truncate text-sm">{column.title}</span>
-                    </div>
-                  );
-                })}
-              </PopoverContent>
-            </Popover>
+  function canMoveTaskToGroup(task: TaskDisplayRow, group: TaskRowGroup): boolean {
+    if (!groupColumn) {
+      return false;
+    }
+    if (group.unset && ["active", "status"].includes(groupColumn.id)) {
+      return false;
+    }
+    return groupColumn.id === "active" || Boolean(groupingFieldForTask(task, groupColumn));
+  }
 
-            <Popover>
-              <PopoverTrigger render={<Button type="button" variant={activeFilters ? "secondary" : "outline"} />}>
-                <Filter className="size-4" />
-                Filter
-              </PopoverTrigger>
-              <PopoverContent align="end" className="w-auto max-w-[92vw] p-0">
-                <FilterPanel columns={columns} rows={rows} sourcesById={sourcesById} filters={filters} onChange={setFilters} />
-              </PopoverContent>
-            </Popover>
+  async function moveTaskToGroup(task: TaskDisplayRow, group: TaskRowGroup) {
+    if (!groupColumn || !canMoveTaskToGroup(task, group)) {
+      return;
+    }
+    if (groupColumn.id === "active") {
+      setTaskActive(task, group.value === true);
+      return;
+    }
+    const field = groupingFieldForTask(task, groupColumn);
+    if (field) {
+      await updateTaskField(task.id, field, group.unset ? undefined : group.value);
+    }
+  }
 
-            <Popover>
-              <PopoverTrigger render={<Button type="button" variant={activeSorts ? "secondary" : "outline"} />}>
-                <ArrowDownWideNarrow className="size-4" />
-                Sort
-              </PopoverTrigger>
-              <PopoverContent align="end" className="w-auto max-w-[92vw] p-0">
-                <SortPanel columns={columns} sorts={sorts} onChange={setSorts} />
-              </PopoverContent>
-            </Popover>
-            <Button type="button" onClick={() => navigate("/focus")}>
-              Continue
+  function draggedTaskRow(): TaskTreeRow | undefined {
+    return visibleRows.find((row) => row.task.id === draggingTaskId);
+  }
+
+  function handleKanbanDragStart(event: DragEvent<HTMLElement>, task: TaskDisplayRow) {
+    event.stopPropagation();
+    setDraggingTaskId(task.id);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", task.id);
+  }
+
+  function handleKanbanDragOver(event: DragEvent<HTMLElement>, group: TaskRowGroup) {
+    const row = draggedTaskRow();
+    if (row && canMoveTaskToGroup(row.task, group)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+    }
+  }
+
+  function handleKanbanDrop(event: DragEvent<HTMLElement>, group: TaskRowGroup) {
+    event.preventDefault();
+    const taskId = event.dataTransfer.getData("text/plain") || draggingTaskId;
+    const row = visibleRows.find((candidate) => candidate.task.id === taskId);
+    setDraggingTaskId(null);
+    if (row) {
+      void moveTaskToGroup(row.task, group);
+    }
+  }
+
+  function taskValueClassName(truncate: boolean) {
+    return truncate ? "min-w-0 truncate" : "min-w-0 whitespace-normal break-words";
+  }
+
+  function renderTaskField(task: TaskDisplayRow, column: TaskTableColumn, truncate: boolean) {
+    const editable = editableFieldFor(task, column);
+    if (column.id === "status") {
+      return (
+        <TaskStatusSelect
+          task={task}
+          disabled={updatingStatusTaskId === task.id}
+          onChange={(open) => void updateTaskStatus(task, open)}
+        />
+      );
+    }
+    return (
+      <span className="inline-flex max-w-full items-center gap-1">
+        {editable ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setEditField({ task, field: editable, value: taskFieldValue(task, editable.path) })}
+          >
+            <Pencil className="size-3.5" />
+          </Button>
+        ) : null}
+        <span className={taskValueClassName(truncate)}>{renderCell(column, task, sourcesById)}</span>
+      </span>
+    );
+  }
+
+  function renderTaskTableRow({ task, depth, children }: TaskTreeRow) {
+    return (
+      <TableRow key={task.id} style={{ backgroundColor: childBackground(depth) }}>
+        <TableCell className={cellClassName}>
+          {children.length > 0 ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label={expandedIds.has(task.id) ? "Collapse child tasks" : "Expand child tasks"}
+              onClick={() => toggleTask(task.id)}
+            >
+              {expandedIds.has(task.id) ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+            </Button>
+          ) : null}
+        </TableCell>
+        {visibleColumns.map((column) => (
+          <TableCell key={column.id} className={cellClassName ?? (column.id === "contents" ? "max-w-md whitespace-normal" : "max-w-72 truncate")}>
+            {renderTaskField(task, column, true)}
+          </TableCell>
+        ))}
+        <TableCell className={cellClassName}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            disabled={deletingTaskId === task.id}
+            aria-label="Delete task"
+            onClick={() => void handleDeleteTask(task)}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        </TableCell>
+      </TableRow>
+    );
+  }
+
+  function renderKanbanCard(row: TaskTreeRow) {
+    const canDrag = groupColumn ? canMoveTaskToGroup(row.task, { key: "", title: "", value: undefined, unset: false, rows: [] }) : false;
+    return (
+      <div
+        key={row.task.id}
+        className={`rounded-lg border border-border bg-card p-3 shadow-sm ${draggingTaskId === row.task.id ? "opacity-60" : ""}`}
+        style={{ backgroundColor: childBackground(row.depth) }}
+      >
+        <div className="mb-2 flex justify-end">
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              disabled={!canDrag}
+              draggable={canDrag}
+              aria-label="Drag task"
+              className={canDrag ? "cursor-grab active:cursor-grabbing" : undefined}
+              onDragStart={(event) => handleKanbanDragStart(event, row.task)}
+              onDragEnd={(event) => {
+                event.stopPropagation();
+                setDraggingTaskId(null);
+              }}
+            >
+              <GripVertical className="size-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              disabled={deletingTaskId === row.task.id}
+              aria-label="Delete task"
+              onClick={() => void handleDeleteTask(row.task)}
+            >
+              <Trash2 className="size-3.5" />
             </Button>
           </div>
-        </CardHeader>
-        <CardContent>
+        </div>
+        <div className="grid gap-2">
+          {visibleColumns.map((column) => (
+            <div key={column.id} className="grid min-w-0 gap-1 text-xs">
+              <div className="text-muted-foreground">{column.title}</div>
+              <div className={`min-w-0 text-sm ${compactKanban ? "truncate" : "whitespace-normal break-words"}`}>
+                {renderTaskField(row.task, column, compactKanban)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function renderKanbanBoard() {
+    const groups = activeGroup ? groupedRows : taskRowGroups(visibleRows, null, sourcesById, false);
+    const columnWidthClass = compactKanban ? "auto-cols-[minmax(17rem,1fr)]" : "auto-cols-[minmax(23rem,1fr)]";
+    return (
+      <div className="h-full overflow-x-auto">
+        <div className={`grid h-full grid-flow-col gap-0 ${columnWidthClass}`}>
+          {groups.map((group, index) => {
+            const row = draggedTaskRow();
+            const canDrop = Boolean(row && canMoveTaskToGroup(row.task, group));
+            return (
+              <section
+                key={group.key}
+                className={`flex h-full min-h-72 flex-col bg-transparent transition-colors hover:bg-muted/30 ${index < groups.length - 1 ? "border-r border-border/70" : ""} ${canDrop ? "bg-primary/5" : ""}`}
+                onDragOver={(event) => handleKanbanDragOver(event, group)}
+                onDrop={(event) => handleKanbanDrop(event, group)}
+              >
+                <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                  <h3 className="min-w-0 truncate text-sm font-medium">{group.title}</h3>
+                  <span className="text-xs text-muted-foreground">{group.rows.length}</span>
+                </div>
+                <div className="grid gap-3 overflow-y-auto p-3">
+                  {group.rows.length > 0
+                    ? group.rows.map((row) => renderKanbanCard(row))
+                    : <div className="px-3 py-8 text-center text-sm text-muted-foreground">No tasks</div>}
+                </div>
+              </section>
+            );
+          })}
+          {groups.length === 0 ? (
+            <section className="flex min-h-72 items-center justify-center p-6 text-sm text-muted-foreground">
+              {rows.length > 0 ? "No tasks match the active filters." : "No tasks synced yet."}
+            </section>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <main className="flex h-screen min-h-0 w-full min-w-0 flex-col bg-background">
+      <div className="flex min-h-12 shrink-0 flex-wrap items-center justify-end gap-2 border-b border-border/70 px-4 py-2">
+        <SyncButton
+          type="button"
+          variant="outline"
+          syncing={syncingSources}
+          disabled={!file || file.taskSources.every((source) => source.type === "Internal Task")}
+          onClick={() => void syncTaskSources()}
+        >
+          Refresh
+        </SyncButton>
+        <Popover>
+          <PopoverTrigger render={<Button type="button" variant="outline" />}>
+            <LayoutList className="size-4" />
+            View
+          </PopoverTrigger>
+          <PopoverContent align="end" className="grid w-44 gap-2">
+            <Button type="button" size="sm" variant={view === "small-table" ? "secondary" : "outline"} onClick={() => setView("small-table")}>
+              Small Table
+            </Button>
+            <Button type="button" size="sm" variant={view === "large-table" ? "secondary" : "outline"} onClick={() => setView("large-table")}>
+              Large Table
+            </Button>
+            <Button type="button" size="sm" variant={view === "small-kanban" ? "secondary" : "outline"} onClick={() => setView("small-kanban")}>
+              Small Kanban
+            </Button>
+            <Button type="button" size="sm" variant={view === "large-kanban" ? "secondary" : "outline"} onClick={() => setView("large-kanban")}>
+              Large Kanban
+            </Button>
+          </PopoverContent>
+        </Popover>
+
+        <Popover>
+          <PopoverTrigger render={<Button type="button" variant={activeGroup ? "secondary" : "outline"} />}>
+            <GroupIcon className="size-4" />
+            Group
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-72">
+            <div className="grid gap-3">
+              <label className="flex h-8 items-center justify-between gap-3 text-sm">
+                <span>Create Unset Group</span>
+                <Switch checked={createUnsetGroup} onCheckedChange={setCreateUnsetGroup} />
+              </label>
+              <Select
+                value={groupColumnId ?? UNSET_GROUP_SELECT_VALUE}
+                onValueChange={(value) => setGroupColumnId(value === UNSET_GROUP_SELECT_VALUE ? null : value)}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectTriggerText value={groupColumn?.title} placeholder="Unset" />
+                </SelectTrigger>
+                <SelectContent className="min-w-[var(--radix-select-trigger-width)]">
+                  <SelectItem value={UNSET_GROUP_SELECT_VALUE}>Unset</SelectItem>
+                  {columns.map((column) => (
+                    <SelectItem key={column.id} value={column.id}>
+                      {column.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </PopoverContent>
+        </Popover>
+
+        <Popover>
+          <PopoverTrigger render={<Button type="button" variant="outline" />}>
+            <Columns3Cog className="size-4" />
+            Fields
+          </PopoverTrigger>
+          <PopoverContent align="end" className="max-h-[70vh] w-80 overflow-y-auto">
+            {syncedColumnState.map((state, index) => {
+              const column = columns.find((candidate) => candidate.id === state.id);
+              if (!column) {
+                return null;
+              }
+              return (
+                <div key={state.id} className="flex items-center gap-2">
+                  <Switch
+                    checked={state.visible}
+                    onCheckedChange={(visible) =>
+                      updateColumnState((current) =>
+                        current.map((entry) => entry.id === state.id ? { ...entry, visible } : entry)
+                      )
+                    }
+                  />
+                  <Button type="button" variant="ghost" size="icon-sm" disabled={index === 0} onClick={() => updateColumnState((current) => moveColumn(current, state.id, -1))}>
+                    <ArrowUp className="size-4" />
+                  </Button>
+                  <Button type="button" variant="ghost" size="icon-sm" disabled={index === syncedColumnState.length - 1} onClick={() => updateColumnState((current) => moveColumn(current, state.id, 1))}>
+                    <ArrowDown className="size-4" />
+                  </Button>
+                  <span className="min-w-0 truncate text-sm">{column.title}</span>
+                </div>
+              );
+            })}
+          </PopoverContent>
+        </Popover>
+
+        <Popover>
+          <PopoverTrigger render={<Button type="button" variant={activeFilters ? "secondary" : "outline"} />}>
+            <Filter className="size-4" />
+            Filter
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-auto max-w-[92vw] p-0">
+            <FilterPanel columns={columns} rows={rows} sourcesById={sourcesById} filters={filters} onChange={setFilters} />
+          </PopoverContent>
+        </Popover>
+
+        <Popover>
+          <PopoverTrigger render={<Button type="button" variant={activeSorts ? "secondary" : "outline"} />}>
+            <ArrowDownWideNarrow className="size-4" />
+            Sort
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-auto max-w-[92vw] p-0">
+            <SortPanel columns={columns} sorts={sorts} onChange={setSorts} />
+          </PopoverContent>
+        </Popover>
+        <Button type="button" onClick={() => navigate("/focus")}>
+          Continue
+        </Button>
+      </div>
+      <div className={isKanbanView ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-auto"}>
+        {isKanbanView ? renderKanbanBoard() : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -1377,62 +1790,18 @@ export function TasksPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {visibleRows.length > 0 ? visibleRows.map(({ task, depth, children }) => (
-                <TableRow key={task.id} style={{ backgroundColor: childBackground(depth) }}>
-                  <TableCell className={cellClassName}>
-                    {children.length > 0 ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        aria-label={expandedIds.has(task.id) ? "Collapse child tasks" : "Expand child tasks"}
-                        onClick={() => toggleTask(task.id)}
-                      >
-                        {expandedIds.has(task.id) ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-                      </Button>
-                    ) : null}
-                  </TableCell>
-                  {visibleColumns.map((column) => {
-                    const editable = editableFieldFor(task, column);
-                    return (
-                      <TableCell key={column.id} className={cellClassName ?? (column.id === "contents" ? "max-w-md whitespace-normal" : "max-w-72 truncate")}>
-                        {column.id === "status" ? (
-                          <TaskStatusSelect
-                            task={task}
-                            disabled={updatingStatusTaskId === task.id}
-                            onChange={(open) => void updateTaskStatus(task, open)}
-                          />
-                        ) : (
-                          <span className="inline-flex max-w-full items-center gap-1">
-                            {editable ? (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-xs"
-                                onClick={() => setEditField({ task, field: editable, value: taskFieldValue(task, editable.path) })}
-                              >
-                                <Pencil className="size-3.5" />
-                              </Button>
-                            ) : null}
-                            <span className="min-w-0 truncate">{renderCell(column, task, sourcesById)}</span>
-                          </span>
-                        )}
+              {visibleRows.length > 0 || (activeGroup && createUnsetGroup) ? groupedRows.map((group) => (
+                <Fragment key={group.key}>
+                  {activeGroup ? (
+                    <TableRow>
+                      <TableCell colSpan={visibleColumns.length + 2} className="bg-muted/60 py-2 text-sm font-medium">
+                        <span>{group.title}</span>
+                        <span className="ml-2 text-xs text-muted-foreground">{group.rows.length}</span>
                       </TableCell>
-                    );
-                  })}
-                  <TableCell className={cellClassName}>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      disabled={deletingTaskId === task.id}
-                      aria-label="Delete task"
-                      onClick={() => void handleDeleteTask(task)}
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
+                    </TableRow>
+                  ) : null}
+                  {group.rows.map((row) => renderTaskTableRow(row))}
+                </Fragment>
               )) : (
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length + 2} className="py-8 text-center text-muted-foreground">
@@ -1461,8 +1830,8 @@ export function TasksPage() {
               </TableRow>
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        )}
+      </div>
       {editField ? (
         <MetadataValueDialog
           open

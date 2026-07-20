@@ -1,6 +1,16 @@
 import { v4 as uuidv4 } from "uuid";
 import { LexoRank } from "lexorank";
 import { Octokit } from "@octokit/rest";
+import {
+  githubOwnerTarget,
+  githubRepoSlug,
+  githubRepoSlugsForSource,
+  githubRepoTarget,
+  githubRepoUrl,
+  githubRepositoryFromTask,
+  normalizeGithubRepoSlugs,
+  type GithubRepoTarget
+} from "@/lib/github-task-sources";
 import { extractMarkdownFieldsFromData, hashMarkdownTask } from "@/lib/markdown-task-identity";
 import type { MetadataValue, OnlineAccount, TaskFieldMetadata, TaskRow, TaskSource, TimeLogFile } from "@/lib/types";
 
@@ -22,16 +32,6 @@ type ParsedMarkdownTask = {
   prefix: string;
   checked: boolean;
   lineEnd: string;
-};
-
-type GithubRepoTarget = {
-  owner: string;
-  repo: string;
-};
-
-type GithubSourceTarget = {
-  owner: string;
-  repo?: string;
 };
 
 type GithubClient = InstanceType<typeof Octokit>;
@@ -59,41 +59,8 @@ const GITHUB_ISSUE_STATE_OPTIONS = ["open", "closed"];
 const GITHUB_ISSUE_STATE_REASON_OPTIONS = ["completed", "not_planned", "duplicate", "reopened"];
 const textEncoder = new TextEncoder();
 
-function githubSourceTarget(value: string): GithubSourceTarget | null {
-  const cleaned = value
-    .trim()
-    .replace(/^git@github\.com:/i, "")
-    .replace(/^https?:\/\/api\.github\.com\/repos\//i, "")
-    .replace(/^https?:\/\/github\.com\//i, "")
-    .replace(/^github\.com\//i, "")
-    .split(/[?#]/)[0]
-    .replace(/^\/+|\/+$/g, "");
-  const [owner, repo] = cleaned.split("/").filter(Boolean);
-  if (!owner) {
-    return null;
-  }
-  return {
-    owner: owner.replace(/^@/, ""),
-    repo: repo?.replace(/\.git$/i, "")
-  };
-}
-
-function repoMatch(source: TaskSource): GithubRepoTarget | null {
-  const target = githubSourceTarget(source.url);
-  return target?.repo ? { owner: target.owner, repo: target.repo } : null;
-}
-
-function ownerMatch(source: TaskSource): { owner: string } | null {
-  const target = githubSourceTarget(source.url);
-  return target && !target.repo ? { owner: target.owner } : null;
-}
-
-function githubRepoUrl(repo: GithubRepoTarget): string {
-  return `https://github.com/${repo.owner}/${repo.repo}`;
-}
-
 function githubRepoFromApiItem(repo: GithubRepoApiItem, fallbackOwner: string): GithubRepoTarget | null {
-  const fullNameTarget = typeof repo.full_name === "string" ? githubSourceTarget(repo.full_name) : null;
+  const fullNameTarget = typeof repo.full_name === "string" ? githubRepoTarget(repo.full_name) : null;
   const owner = fullNameTarget?.owner ?? repo.owner?.login ?? fallbackOwner;
   const name = fullNameTarget?.repo ?? repo.name;
   return owner && name ? { owner, repo: name } : null;
@@ -404,7 +371,7 @@ export function syncMarkdownTaskSource(file: TimeLogFile, source: TaskSource, fi
 }
 
 export function isGithubAuthError(error: unknown): boolean {
-  return [401, 403, 404].includes(errorStatus(error));
+  return [401, 404].includes(errorStatus(error));
 }
 
 async function githubReposForOwner(octokit: GithubClient, owner: string): Promise<GithubRepoTarget[]> {
@@ -416,7 +383,7 @@ async function githubReposForOwner(octokit: GithubClient, owner: string): Promis
       per_page: 100
     }) as GithubRepoApiItem[];
   } catch (error) {
-    if (errorStatus(error) !== 404) {
+    if (![403, 404].includes(errorStatus(error))) {
       throw error;
     }
     repos = await octokit.paginate(octokit.rest.repos.listForUser, {
@@ -436,32 +403,34 @@ async function githubReposForOwner(octokit: GithubClient, owner: string): Promis
 }
 
 async function githubReposForSource(source: TaskSource, octokit: GithubClient): Promise<GithubRepoTarget[]> {
-  const repo = repoMatch(source);
+  const storedRepos = githubRepoSlugsForSource(source).flatMap((repository) => {
+    const repo = githubRepoTarget(repository);
+    return repo ? [repo] : [];
+  });
+  if (storedRepos.length > 0) {
+    return storedRepos;
+  }
+  const repo = githubRepoTarget(source.url);
   if (repo) {
     return [repo];
   }
-  const owner = ownerMatch(source);
+  const owner = githubOwnerTarget(source.url);
   return owner ? githubReposForOwner(octokit, owner.owner) : [];
 }
 
-function githubRepoFromTask(source: TaskSource, task: TaskRow): GithubRepoTarget | null {
-  const issueUrlTarget = githubSourceTarget(task.url);
-  if (issueUrlTarget?.repo) {
-    return { owner: issueUrlTarget.owner, repo: issueUrlTarget.repo };
+export async function fetchGithubTaskSourceRepositories(source: TaskSource, account?: OnlineAccount): Promise<TaskSource> {
+  const owner = githubOwnerTarget(source.url);
+  if (source.type !== "Github" || !owner) {
+    return source.type === "Github" ? { ...source, repositoryUrls: undefined } : source;
   }
-  const repository = task.data.repository;
-  const repositoryTarget = typeof repository === "string"
-    ? githubSourceTarget(repository)
-    : repository && typeof repository === "object" && "full_name" in repository
-      ? githubSourceTarget(String((repository as { full_name?: unknown }).full_name ?? ""))
-      : null;
-  if (repositoryTarget?.repo) {
-    return { owner: repositoryTarget.owner, repo: repositoryTarget.repo };
-  }
-  const repositoryUrlTarget = typeof task.data.repository_url === "string" ? githubSourceTarget(task.data.repository_url) : null;
-  return repositoryUrlTarget?.repo
-    ? { owner: repositoryUrlTarget.owner, repo: repositoryUrlTarget.repo }
-    : repoMatch(source);
+  const octokit = new Octokit(account?.token ? { auth: account.token } : {});
+  return {
+    ...source,
+    repositoryUrls: normalizeGithubRepoSlugs(
+      (await githubReposForOwner(octokit, owner.owner)).map(githubRepoSlug),
+      owner.owner
+    )
+  };
 }
 
 export async function fetchGithubIssueTasks(
@@ -769,7 +738,7 @@ export async function updateGithubTaskField(
   value: MetadataValue,
   account?: OnlineAccount
 ): Promise<void> {
-  const repo = githubRepoFromTask(source, task);
+  const repo = githubRepositoryFromTask(source, task);
   const number = issueNumber(task);
   const rawObjectType = task.data.__strata && typeof task.data.__strata === "object"
     ? (task.data.__strata as { rawObjectType?: string }).rawObjectType
@@ -833,7 +802,7 @@ export async function createGithubTask(
   fields: TaskFieldMetadata[],
   account?: OnlineAccount
 ): Promise<void> {
-  const repo = repoMatch(source);
+  const repo = githubRepoTarget(source.url);
   if (!repo) {
     throw new Error("New GitHub tasks must be created from a repository task source.");
   }
@@ -891,7 +860,7 @@ export async function deleteGithubTask(
   tasks: TaskRow[],
   account?: OnlineAccount
 ): Promise<void> {
-  const repo = githubRepoFromTask(source, task);
+  const repo = githubRepositoryFromTask(source, task);
   if (!repo) {
     throw new Error("GitHub task repository could not be found.");
   }

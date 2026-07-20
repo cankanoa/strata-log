@@ -25,6 +25,7 @@ import {
   sanitizeInternalTaskValues
 } from "@/lib/internal-tasks";
 import { extractMarkdownFieldsFromData, hashMarkdownTask } from "@/lib/markdown-task-identity";
+import { writeTaskSourceRepositoryComment } from "@/lib/task-source-comments";
 import type {
   ActiveTaskReference,
   EntryInterval,
@@ -714,6 +715,7 @@ export const TimeLogDatabase = {
           }))
         );
       }
+      writeTaskSourceRepositoryComment(db, normalizedSources);
       db.table("tasks").all().forEach((row) => {
         if (!sourceIds.has(String(row.source_id))) {
           db.table("tasks").where({ uuid: String(row.uuid) }).delete();

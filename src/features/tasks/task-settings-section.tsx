@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SyncButton } from "@/components/ui/sync-button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -225,6 +226,7 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
   const [columnAccessDialog, setColumnAccessDialog] = useState<ColumnAccessDialogState>(null);
   const [valueDialog, setValueDialog] = useState<ValueDialogState>(null);
   const [optionsDialog, setOptionsDialog] = useState<OptionsDialogState>(null);
+  const [syncingSourceIds, setSyncingSourceIds] = useState<Set<string>>(() => new Set());
 
   const newColumnField = normalizeInternalColumn({
     type: newColumnType,
@@ -291,13 +293,15 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
     if (source?.type === "Internal Task") {
       return;
     }
-    const result = await syncTaskSource(sourceId);
-    if (!result.authRequired) {
-      return;
-    }
-    const token = window.prompt("GitHub token");
-    if (token?.trim()) {
-      await syncTaskSource(sourceId, token);
+    setSyncingSourceIds((current) => new Set(current).add(sourceId));
+    try {
+      await syncTaskSource(sourceId);
+    } finally {
+      setSyncingSourceIds((current) => {
+        const next = new Set(current);
+        next.delete(sourceId);
+        return next;
+      });
     }
   }
 
@@ -306,6 +310,9 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
       await syncSource(source.id);
     }
   }
+
+  const hasSyncableSources = sources.some((source) => source.type !== "Internal Task");
+  const syncingAnySource = syncingSourceIds.size > 0;
 
   async function saveColumn(name: string, patch: Partial<FieldDefinition>) {
     const field = internalColumns[name];
@@ -368,10 +375,9 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
         <CardHeader>
           <CardTitle>Task Sources</CardTitle>
           <CardAction>
-            <Button type="button" variant="outline" size="sm" disabled={!file || sources.every((source) => source.type === "Internal Task")} onClick={() => void syncAllSources()}>
-              <RefreshCw className="size-4" />
+            <SyncButton type="button" variant="outline" size="sm" syncing={syncingAnySource} disabled={!file || !hasSyncableSources} onClick={() => void syncAllSources()}>
               Sync
-            </Button>
+            </SyncButton>
           </CardAction>
         </CardHeader>
         <CardContent>
@@ -458,9 +464,7 @@ export function TaskSettingsSection({ sections = ["tasks", "accounts"] }: { sect
                   <TableCell>
                     <div className="flex justify-end gap-1">
                       {source.type !== "Internal Task" ? (
-                        <Button type="button" variant="ghost" size="icon" onClick={() => void syncSource(source.id)}>
-                          <RefreshCw className="size-4" />
-                        </Button>
+                        <SyncButton type="button" variant="ghost" size="icon" syncing={syncingSourceIds.has(source.id)} aria-label="Sync task source" onClick={() => void syncSource(source.id)} />
                       ) : null}
                       <Button type="button" variant="ghost" size="icon" onClick={() => void updateTaskSources(sources.filter((candidate) => candidate.id !== source.id))}>
                         <Trash2 className="size-4" />

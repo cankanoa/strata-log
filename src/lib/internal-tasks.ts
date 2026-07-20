@@ -110,13 +110,15 @@ export function normalizeInternalTaskSources(
     if (source.type !== "Internal Task") {
       return {
         ...source,
-        columnNames: undefined
+        columnNames: undefined,
+        repositoryUrls: source.type === "Github" ? source.repositoryUrls : undefined
       };
     }
     return {
       ...source,
       url: source.url || `internal-task:${source.id}`,
-      columnNames: uniqueColumnNames(source.columnNames ?? [], validNames)
+      columnNames: uniqueColumnNames(source.columnNames ?? [], validNames),
+      repositoryUrls: undefined
     };
   });
 }

@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { getPlatformApi } from "@/lib/platform";
 import { loadFileSearchTree, type FileSearchNode } from "@/lib/file-search";
+import { defaultGeneralSettings } from "@/lib/defaults";
 import { getRunningEntry } from "@/lib/time";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
@@ -120,7 +121,7 @@ export function FileSidebarBrowser() {
     }))
   );
   const runningEntry = useMemo(() => getRunningEntry(file?.entries ?? []), [file]);
-  const refreshRateSeconds = file?.settings?.refreshRateSeconds ?? 0;
+  const refreshRateSeconds = file?.settings?.refreshRateSeconds ?? defaultGeneralSettings.refreshRateSeconds;
   const [nodes, setNodes] = useState<FileSearchNode[]>([]);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   const [expanded, setExpanded] = useState(true);
