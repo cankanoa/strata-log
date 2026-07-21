@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, FileText, Folder } from "lucide-react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { getPlatformApi } from "@/lib/platform";
 import { loadFileSearchTree, type FileSearchNode } from "@/lib/file-search";
@@ -182,25 +182,36 @@ export function FileSidebarBrowser() {
   return (
     <div className="flex w-full flex-col gap-2">
       <div
-        className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${
+        role="link"
+        tabIndex={0}
+        aria-current={location.pathname === "/files" ? "page" : undefined}
+        className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
           location.pathname === "/files"
             ? "border-primary bg-primary text-primary-foreground"
-            : "border-border/70 bg-background/70"
+            : "border-border/70 bg-background/70 hover:bg-background"
         }`}
+        onClick={() => navigate("/files")}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) {
+            return;
+          }
+          event.preventDefault();
+          navigate("/files");
+        }}
       >
-        <Link
-          to="/files"
-          className={`min-w-0 flex-1 text-sm font-medium transition-colors ${location.pathname === "/files" ? "text-primary-foreground" : "hover:opacity-80"}`}
-        >
+        <span className="min-w-0 flex-1 text-sm font-medium">
           Files
-        </Link>
+        </span>
         {hasFiles ? (
           <Button
             type="button"
             size="icon"
             variant={location.pathname === "/files" ? "secondary" : "ghost"}
             className="shrink-0"
-            onClick={() => setExpanded((current) => !current)}
+            onClick={(event) => {
+              event.stopPropagation();
+              setExpanded((current) => !current);
+            }}
           >
             {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
           </Button>

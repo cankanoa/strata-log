@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ChevronRight, Pause, Play, Square } from "lucide-react";
 import { toast } from "sonner";
@@ -141,6 +141,14 @@ export default function App() {
   const trackSubtext = runningEntry ? formatDurationWithSeconds(netDurationMs(runningEntry)) : undefined;
   const focusSubtext = focusEndsAt ? formatFocusDuration(focusRemainingSeconds) : undefined;
   const taskSubtext = activeTask?.contents;
+
+  function handleSidebarNavKeyDown(event: KeyboardEvent<HTMLDivElement>, path: string) {
+    if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) {
+      return;
+    }
+    event.preventDefault();
+    navigate(path);
+  }
 
   function scrollToSection(sectionId: string) {
     document.getElementById(sectionId)?.scrollIntoView({
@@ -314,21 +322,21 @@ export default function App() {
             </nav>
             <div className="flex flex-col gap-2">
               <div
-                className={`h-16 rounded-xl border px-3 py-2 ${
+                role="link"
+                tabIndex={0}
+                aria-current={location.pathname === "/track" ? "page" : undefined}
+                className={`h-16 cursor-pointer rounded-xl border px-3 py-2 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
                   location.pathname === "/track"
                     ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border/70 bg-background/70"
+                    : "border-border/70 bg-background/70 hover:bg-background"
                 }`}
+                onClick={() => navigate("/track")}
+                onKeyDown={(event) => handleSidebarNavKeyDown(event, "/track")}
               >
                 <div className="flex h-full items-center justify-between gap-2">
-                  <Link
-                    to="/track"
-                    className={`flex h-full min-w-0 flex-1 flex-col justify-center rounded-md outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${
-                      location.pathname === "/track" ? "text-primary-foreground" : "hover:opacity-80"
-                    }`}
-                  >
+                  <div className="flex h-full min-w-0 flex-1 flex-col justify-center">
                     <SidebarStatusText title="Track" subtext={trackSubtext} active={location.pathname === "/track"} mono />
-                  </Link>
+                  </div>
                   <Button
                     size="icon"
                     variant={location.pathname === "/track" ? "secondary" : "ghost"}
@@ -338,7 +346,8 @@ export default function App() {
                         : undefined
                     }
                     disabled={!file}
-                    onClick={() => {
+                    onClick={(event) => {
+                      event.stopPropagation();
                       if (runningEntry) {
                         void stopLiveEntry();
                         return;
@@ -351,21 +360,21 @@ export default function App() {
                 </div>
               </div>
               <div
-                className={`h-16 rounded-xl border px-3 py-2 ${
+                role="link"
+                tabIndex={0}
+                aria-current={location.pathname === "/tasks" ? "page" : undefined}
+                className={`h-16 cursor-pointer rounded-xl border px-3 py-2 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
                   location.pathname === "/tasks"
                     ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border/70 bg-background/70"
+                    : "border-border/70 bg-background/70 hover:bg-background"
                 }`}
+                onClick={() => navigate("/tasks")}
+                onKeyDown={(event) => handleSidebarNavKeyDown(event, "/tasks")}
               >
                 <div className="flex h-full items-center justify-between gap-2">
-                  <Link
-                    to="/tasks"
-                    className={`flex h-full min-w-0 flex-1 flex-col justify-center rounded-md outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${
-                      location.pathname === "/tasks" ? "text-primary-foreground" : "hover:opacity-80"
-                    }`}
-                  >
+                  <div className="flex h-full min-w-0 flex-1 flex-col justify-center">
                     <SidebarStatusText title="Tasks" subtext={taskSubtext} active={location.pathname === "/tasks"} />
-                  </Link>
+                  </div>
                   {taskSubtext && activeTasks.length > 1 ? (
                     <Button
                       size="icon"
@@ -375,7 +384,10 @@ export default function App() {
                           ? "bg-primary-foreground text-primary hover:bg-primary-foreground/90"
                           : undefined
                       }
-                      onClick={() => setActiveTaskIndex((index) => (index + 1) % activeTasks.length)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setActiveTaskIndex((index) => (index + 1) % activeTasks.length);
+                      }}
                     >
                       <ChevronRight className="size-4" />
                     </Button>
@@ -383,21 +395,21 @@ export default function App() {
                 </div>
               </div>
               <div
-                className={`h-16 rounded-xl border px-3 py-2 ${
+                role="link"
+                tabIndex={0}
+                aria-current={location.pathname === "/focus" ? "page" : undefined}
+                className={`h-16 cursor-pointer rounded-xl border px-3 py-2 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
                   location.pathname === "/focus"
                     ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border/70 bg-background/70"
+                    : "border-border/70 bg-background/70 hover:bg-background"
                 }`}
+                onClick={() => navigate("/focus")}
+                onKeyDown={(event) => handleSidebarNavKeyDown(event, "/focus")}
               >
                 <div className="flex h-full items-center justify-between gap-2">
-                  <Link
-                    to="/focus"
-                    className={`flex h-full min-w-0 flex-1 flex-col justify-center rounded-md outline-none transition focus-visible:ring-2 focus-visible:ring-ring ${
-                      location.pathname === "/focus" ? "text-primary-foreground" : "hover:opacity-80"
-                    }`}
-                  >
+                  <div className="flex h-full min-w-0 flex-1 flex-col justify-center">
                     <SidebarStatusText title="Focus" subtext={focusSubtext} active={location.pathname === "/focus"} mono />
-                  </Link>
+                  </div>
                   <Button
                     size="icon"
                     variant={location.pathname === "/focus" ? "secondary" : "ghost"}
@@ -406,7 +418,8 @@ export default function App() {
                         ? "bg-primary-foreground text-primary hover:bg-primary-foreground/90"
                         : undefined
                     }
-                    onClick={() => {
+                    onClick={(event) => {
+                      event.stopPropagation();
                       if (focusEndsAt) {
                         pauseFocusTimer();
                         return;

@@ -71,7 +71,7 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], task
   }, [file, onChange, value]);
 
   return (
-    <div className="grid gap-4 md:grid-cols-2">
+    <div className="grid items-start gap-4 md:grid-cols-2">
       {getMetadataFields(visibleFields).filter(([, field]) => !isFieldHidden(field)).map(([key, field]) => {
         const effectiveSelection =
           field.type === "attribute_reference" && getFieldSelection(field) !== "multiselect"
@@ -83,7 +83,7 @@ export function MetadataFieldsForm({ fields, attributeReferenceGroups = [], task
         const addable = editable && isFieldAddable(field) && Boolean(onEditOptions);
 
         return (
-        <div className="grid min-w-0 gap-2" key={key}>
+        <div className="grid min-w-0 content-start gap-2 self-start" key={key}>
           {field.type !== "datetime" ? (
             <Label htmlFor={`metadata-${key}`}>
               {key}
