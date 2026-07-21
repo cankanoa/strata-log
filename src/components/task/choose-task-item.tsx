@@ -44,7 +44,7 @@ export function ChooseTaskItem({
     <Select
       value={value ?? UNSET_VALUE}
       disabled={disabled}
-      onValueChange={(nextValue) => onChange(nextValue === UNSET_VALUE ? undefined : nextValue)}
+      onValueChange={(nextValue) => onChange(nextValue == null || nextValue === UNSET_VALUE ? undefined : nextValue)}
     >
       <SelectTrigger className="w-full min-w-48">
         <SelectValue>

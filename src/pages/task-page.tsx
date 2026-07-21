@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState, type Dispatch, type DragEvent, type ReactNode, type SetStateAction } from "react";
+import { Fragment, useEffect, useMemo, useState, type Dispatch, type DragEvent, type ReactNode, type SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowDown,
@@ -44,6 +44,7 @@ import { extractMarkdownFieldsFromData } from "@/lib/markdown-task-identity";
 import type { ActiveTaskReference, FieldDefinition, MetadataValue, TaskDisplayRow, TaskFieldMetadata, TaskSource } from "@/lib/types";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
+import { getSettingsRow, replaceSettingsRow, SETTINGS_ROWS } from "@/lib/app-settings";
 
 type TaskTreeRow = {
   task: TaskDisplayRow;
@@ -1256,11 +1257,39 @@ export function TasksPage() {
   const [updatingStatusTaskId, setUpdatingStatusTaskId] = useState<string | null>(null);
   const [syncingSources, setSyncingSources] = useState(false);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [editField, setEditField] = useState<{
     task: TaskDisplayRow;
     field: TaskFieldMetadata;
     value: MetadataValue;
   } | null>(null);
+
+  useEffect(() => {
+    void Promise.all([
+      getSettingsRow(SETTINGS_ROWS.tasksTableRow),
+      getSettingsRow(SETTINGS_ROWS.tasksViewSelection),
+      getSettingsRow(SETTINGS_ROWS.tasksGroup),
+      getSettingsRow(SETTINGS_ROWS.tasksFields),
+      getSettingsRow(SETTINGS_ROWS.tasksFilter),
+      getSettingsRow(SETTINGS_ROWS.tasksSort)
+    ]).then(([tableRow, viewRow, groupRow, fieldsRow, filterRow, sortRow]) => {
+      if (Array.isArray(tableRow.expanded_ids)) setExpandedIds(new Set(tableRow.expanded_ids.map(String)));
+      if (["small-table", "large-table", "small-kanban", "large-kanban"].includes(String(viewRow.view))) setView(viewRow.view as TaskViewMode);
+      if (typeof groupRow.column_id === "string") setGroupColumnId(groupRow.column_id);
+      if (groupRow.create_unset_group === true) setCreateUnsetGroup(true);
+      if (Array.isArray(fieldsRow.columns)) setColumnState(fieldsRow.columns as ColumnState[]);
+      if (Array.isArray(filterRow.filters)) setFilters(filterRow.filters as FilterState[]);
+      if (Array.isArray(sortRow.sorts)) setSorts(sortRow.sorts as SortState[]);
+      setSettingsHydrated(true);
+    });
+  }, []);
+
+  useEffect(() => { if (settingsHydrated) void replaceSettingsRow(SETTINGS_ROWS.tasksTableRow, expandedIds.size ? { expanded_ids: [...expandedIds] } : undefined); }, [expandedIds, settingsHydrated]);
+  useEffect(() => { if (settingsHydrated) void replaceSettingsRow(SETTINGS_ROWS.tasksViewSelection, view === "small-table" ? undefined : { view }); }, [settingsHydrated, view]);
+  useEffect(() => { if (settingsHydrated) void replaceSettingsRow(SETTINGS_ROWS.tasksGroup, groupColumnId || createUnsetGroup ? { ...(groupColumnId ? { column_id: groupColumnId } : {}), ...(createUnsetGroup ? { create_unset_group: true } : {}) } : undefined); }, [createUnsetGroup, groupColumnId, settingsHydrated]);
+  useEffect(() => { if (settingsHydrated) void replaceSettingsRow(SETTINGS_ROWS.tasksFields, columnState.length ? { columns: columnState } : undefined); }, [columnState, settingsHydrated]);
+  useEffect(() => { if (settingsHydrated) void replaceSettingsRow(SETTINGS_ROWS.tasksFilter, filters.length ? { filters } : undefined); }, [filters, settingsHydrated]);
+  useEffect(() => { if (settingsHydrated) void replaceSettingsRow(SETTINGS_ROWS.tasksSort, sorts.length ? { sorts } : undefined); }, [settingsHydrated, sorts]);
   function setTaskActive(task: TaskDisplayRow, active: boolean) {
     if (!file) {
       return;

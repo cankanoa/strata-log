@@ -1,4 +1,4 @@
-import { parseDatabaseRegistry, serializeDatabaseRegistry, type DatabaseRegistryEntry } from "@/lib/database-registry";
+import { parseDatabaseRegistry, parseDatabaseRegistrySettings, serializeDatabaseRegistry, type DatabaseRegistryEntry } from "@/lib/database-registry";
 import { getPlatformApi } from "@/lib/platform";
 
 export type DatabaseReferenceStatus = {
@@ -34,6 +34,6 @@ export async function removeDatabaseReferences(entriesToRemove: DatabaseRegistry
   const raw = await getPlatformApi().readDatabaseRegistry();
   const entries = raw.trim().length > 0 ? parseDatabaseRegistry(raw) : [];
   const nextEntries = entries.filter((entry) => !removeIds.has(entry.id));
-  await getPlatformApi().saveDatabaseRegistry(serializeDatabaseRegistry(nextEntries));
+  await getPlatformApi().saveDatabaseRegistry(serializeDatabaseRegistry(nextEntries, parseDatabaseRegistrySettings(raw)));
   return nextEntries;
 }

@@ -29,6 +29,7 @@ import {
 } from "@/lib/time-log-database";
 import {
   createDatabaseRegistryEntry,
+  parseDatabaseRegistrySettings,
   parseDatabaseRegistry,
   serializeDatabaseRegistry,
   setActiveDatabaseEntry,
@@ -509,7 +510,9 @@ export function DatabaseSection({ sections = ["sources", "track"] }: { sections?
   }
 
   async function saveDatabaseEntries(entries: DatabaseRegistryEntry[]) {
-    await getPlatformApi().saveDatabaseRegistry(serializeDatabaseRegistry(entries));
+    const currentRaw = await getPlatformApi().readDatabaseRegistry();
+    const settings = parseDatabaseRegistrySettings(currentRaw);
+    await getPlatformApi().saveDatabaseRegistry(serializeDatabaseRegistry(entries, settings));
     setDatabaseEntries(entries);
     await resolveDatabaseFileInfo(entries);
   }

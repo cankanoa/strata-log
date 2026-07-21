@@ -916,11 +916,11 @@ export async function updateGithubTaskField(
         owner: repo.owner,
         repo: repo.repo,
         issue_number: parentNumber,
-        body: updateMarkdownTaskParentText(issue.data.body ?? "", task, tasks, valueRecordText(value))
+        body: updateMarkdownTaskParentText(issue.data.body ?? "", task, tasks, valueRecordText(value) ?? undefined)
       });
       return true;
     }
-    await updateGithubTaskParent(source, task, valueRecordText(value), account);
+    await updateGithubTaskParent(source, task, valueRecordText(value) ?? undefined, account);
     return true;
   }
   if (field.path === "status" && rawObjectType === "github_checklist_task") {

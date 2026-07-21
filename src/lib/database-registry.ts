@@ -10,6 +10,8 @@ export type DatabaseRegistryEntry = {
   activeDatabase?: boolean;
 };
 
+export type DatabaseRegistrySettings = Record<string, Row[string]>;
+
 const EMPTY_REGISTRY = `--- csdb
 format: CSDB
 version: 1
@@ -29,9 +31,20 @@ const DATABASES_TABLE: TableSchema = {
   primary_key: { columns: ["id"] }
 };
 
+const SETTINGS_TABLE: TableSchema = {
+  name: "settings",
+  columns: {
+    key: "text",
+    value: "json"
+  },
+  required: ["key", "value"],
+  primary_key: { columns: ["key"] }
+};
+
 function createRegistryDatabase(): CSDBDatabase {
   const db = CSDBDatabase.parse(EMPTY_REGISTRY);
   db.createTable(DATABASES_TABLE);
+  db.createTable(SETTINGS_TABLE);
   return db;
 }
 
@@ -90,7 +103,25 @@ export function parseDatabaseRegistry(raw: string): DatabaseRegistryEntry[] {
   );
 }
 
-export function serializeDatabaseRegistry(entries: DatabaseRegistryEntry[]): string {
+export function parseDatabaseRegistrySettings(raw: string): DatabaseRegistrySettings {
+  if (!raw.trim()) {
+    return {};
+  }
+  const db = CSDBDatabase.parse(raw);
+  if (!db.document.tables.has("settings")) {
+    return {};
+  }
+  return Object.fromEntries(
+    db.table("settings").all()
+      .map((row: Row) => [String(row.key ?? ""), row.value] as const)
+      .filter(([key]) => key.length > 0)
+  );
+}
+
+export function serializeDatabaseRegistry(
+  entries: DatabaseRegistryEntry[],
+  settings: DatabaseRegistrySettings = {}
+): string {
   const db = createRegistryDatabase();
   const normalizedEntries = normalizeActiveDatabase(entries);
   if (normalizedEntries.length > 0) {
@@ -100,6 +131,10 @@ export function serializeDatabaseRegistry(entries: DatabaseRegistryEntry[]): str
       url: entry.url,
       active_database: Boolean(entry.activeDatabase)
     })));
+  }
+  const settingRows = Object.entries(settings).map(([key, value]) => ({ key, value }));
+  if (settingRows.length > 0) {
+    db.table("settings").insert(settingRows);
   }
   return serializeCSDB(db);
 }

@@ -4,6 +4,7 @@ version: 1
 name: strata-log-databases
 tables:
   - databases
+  - settings
 
 --- table:databases:schema
 name: databases
@@ -30,4 +31,27 @@ comments: {}
 
 --- table:databases:data
 id,location,url,active_database
+
+--- table:settings:schema
+name: settings
+columns:
+  key: text
+  value: json
+required:
+  - key
+  - value
+primary_key:
+  columns:
+    - key
+defaults: {}
+unique: []
+foreign_keys: []
+constraints: []
+indexes: []
+computed_fields: {}
+comments: {}
+
+--- table:settings:data
+key,value
+
 

@@ -2,7 +2,9 @@ import { DatabaseSection } from "@/features/database/database-section";
 import { TaskSettingsSection } from "@/features/tasks/task-settings-section";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { defaultGeneralSettings } from "@/lib/defaults";
+import { restartOnboarding } from "@/lib/app-settings";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
 
@@ -60,9 +62,34 @@ export function SettingsPage() {
         <DatabaseSection sections={["track"]} />
       </section>
 
-      <section id="task-settings-section" className="grid scroll-mt-6 gap-4 pb-10">
+      <section id="task-settings-section" className="grid scroll-mt-6 gap-4">
         <SettingsHeading>Tasks</SettingsHeading>
         <TaskSettingsSection sections={["tasks"]} />
+      </section>
+
+      <section id="information-settings-section" className="grid scroll-mt-6 gap-4 pb-10">
+        <SettingsHeading>Information</SettingsHeading>
+        <Card className="border-white/60 bg-card/90 shadow-xl shadow-amber-950/5">
+          <CardHeader>
+            <CardTitle>Taskasaur</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="grid gap-1 text-sm">
+              <a
+                href="https://github.com/taskasaur/taskasaur"
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium underline underline-offset-4 hover:text-muted-foreground"
+              >
+                taskasaur/taskasaur
+              </a>
+              <p className="text-muted-foreground">Source code, releases, and project information.</p>
+            </div>
+            <Button type="button" variant="outline" onClick={() => void restartOnboarding()}>
+              Restart Onboarding
+            </Button>
+          </CardContent>
+        </Card>
       </section>
     </main>
   );

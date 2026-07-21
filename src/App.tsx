@@ -17,7 +17,11 @@ import { TrackPage } from "@/pages/track-page";
 import { SettingsPage } from "@/pages/settings-page";
 import { FilesPage } from "@/pages/files-page";
 import { TasksPage } from "@/pages/task-page";
+import { OnboardingPage } from "@/pages/onboarding-page";
+import { parseDatabaseRegistrySettings } from "@/lib/database-registry";
+import { RESTART_ONBOARDING_EVENT, SETTINGS_ROWS } from "@/lib/app-settings";
 import { useAppStore } from "@/store/app-store";
+import type { FocusSound, FocusVibration } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
 
 function formatFocusDuration(totalSeconds: number) {
@@ -26,22 +30,27 @@ function formatFocusDuration(totalSeconds: number) {
   return `${minutes}:${seconds}`;
 }
 
-function playFocusCompleteAlert(mode: "sound" | "vibrate" | "both") {
-  if ((mode === "vibrate" || mode === "both") && typeof navigator !== "undefined" && "vibrate" in navigator) {
-    navigator.vibrate([200, 100, 200]);
+function playFocusCompleteAlert(sound: FocusSound, vibration: FocusVibration) {
+  if (vibration !== "none" && typeof navigator !== "undefined" && "vibrate" in navigator) {
+    navigator.vibrate(vibration === "pulse" ? [180, 100, 180, 100, 260] : 250);
   }
 
-  if (mode === "sound" || mode === "both") {
+  if (sound !== "none") {
     const context = new AudioContext();
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.connect(gain);
-    gain.connect(context.destination);
-    oscillator.type = "sine";
-    oscillator.frequency.value = 880;
-    gain.gain.setValueAtTime(0.12, context.currentTime);
-    oscillator.start();
-    oscillator.stop(context.currentTime + 0.25);
+    const notes = sound === "chime" ? [659, 880] : sound === "bell" ? [1047, 784, 1047] : [523, 659, 784];
+    notes.forEach((frequency, index) => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const start = context.currentTime + index * (sound === "gentle" ? 0.18 : 0.12);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.type = sound === "bell" ? "triangle" : "sine";
+      oscillator.frequency.value = frequency;
+      gain.gain.setValueAtTime(sound === "gentle" ? 0.07 : 0.11, start);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.35);
+      oscillator.start(start);
+      oscillator.stop(start + 0.36);
+    });
   }
 }
 
@@ -89,7 +98,8 @@ export default function App() {
     trackDraftMetadata,
     startLiveEntry,
     stopLiveEntry,
-    focusSoundMode,
+    focusSound,
+    focusVibration,
     focusDurationSeconds,
     focusEndsAt,
     startFocusTimer,
@@ -106,7 +116,8 @@ export default function App() {
       trackDraftMetadata: state.trackDraftMetadata,
       startLiveEntry: state.startLiveEntry,
       stopLiveEntry: state.stopLiveEntry,
-      focusSoundMode: state.focusSoundMode,
+      focusSound: state.focusSound,
+      focusVibration: state.focusVibration,
       focusDurationSeconds: state.focusDurationSeconds,
       focusEndsAt: state.focusEndsAt,
       startFocusTimer: state.startFocusTimer,
@@ -118,6 +129,7 @@ export default function App() {
   const [trayTick, setTrayTick] = useState(0);
   const [activeTaskIndex, setActiveTaskIndex] = useState(0);
   const [missingDatabaseReferences, setMissingDatabaseReferences] = useState<DatabaseReferenceStatus[]>([]);
+  const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null);
   const startupDatabaseSyncRan = useRef(false);
   const githubMetadataRefreshKey = useRef("");
   const focusRemainingSeconds = focusEndsAt
@@ -163,6 +175,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const restart = () => setOnboardingComplete(false);
+    window.addEventListener(RESTART_ONBOARDING_EVENT, restart);
+    return () => window.removeEventListener(RESTART_ONBOARDING_EVENT, restart);
+  }, []);
+
+  useEffect(() => {
     setActiveTaskIndex(0);
   }, [activeTaskKey]);
 
@@ -192,6 +210,39 @@ export default function App() {
   }, [file, githubSourceKey]);
 
   useEffect(() => {
+    void getPlatformApi().readDatabaseRegistry()
+      .then((raw) => {
+        const settings = parseDatabaseRegistrySettings(raw);
+        const track = settings[SETTINGS_ROWS.trackSessionsSection];
+        const time = settings[SETTINGS_ROWS.focusTimeAmount];
+        const mode = settings[SETTINGS_ROWS.focusMode];
+        const alert = settings[SETTINGS_ROWS.completeAlert];
+        const trackValue = track && typeof track === "object" && !Array.isArray(track) ? track : {};
+        const timeValue = time && typeof time === "object" && !Array.isArray(time) ? time : {};
+        const modeValue = mode && typeof mode === "object" && !Array.isArray(mode) ? mode : {};
+        const alertValue = alert && typeof alert === "object" && !Array.isArray(alert) ? alert : {};
+        const minutes = typeof timeValue.minutes === "number" && timeValue.minutes > 0 ? timeValue.minutes : undefined;
+        const customMinutes = typeof timeValue.custom_minutes === "string" ? timeValue.custom_minutes : undefined;
+        useAppStore.setState({
+          ...(trackValue.view === "list" || trackValue.view === "week" || trackValue.view === "month" ? { entriesView: trackValue.view } : {}),
+          ...(Array.isArray(trackValue.filters) ? { filters: trackValue.filters as never } : {}),
+          ...(trackValue.sort && typeof trackValue.sort === "object" && !Array.isArray(trackValue.sort) ? { sort: trackValue.sort as never } : {}),
+          ...(trackValue.metadata && typeof trackValue.metadata === "object" && !Array.isArray(trackValue.metadata) ? { trackDraftMetadata: trackValue.metadata as never } : {}),
+          ...(modeValue.mode === "focus" || modeValue.mode === "break" ? { focusMode: modeValue.mode } : {}),
+          ...(alertValue.sound === "none" || alertValue.sound === "chime" || alertValue.sound === "bell" || alertValue.sound === "gentle" ? { focusSound: alertValue.sound } : {}),
+          ...(alertValue.vibrate === "none" || alertValue.vibrate === "short" || alertValue.vibrate === "pulse" ? { focusVibration: alertValue.vibrate } : {}),
+          ...(minutes ? { focusSelectedMinutes: minutes, focusCustomSelected: false, focusDurationSeconds: minutes * 60 } : {}),
+          ...(customMinutes ? { focusCustomMinutes: customMinutes, focusCustomSelected: true, focusDurationSeconds: Number(customMinutes) * 60 } : {})
+        });
+        setOnboardingComplete(settings.onboarding_complete === true);
+      })
+      .catch(() => setOnboardingComplete(false));
+  }, []);
+
+  useEffect(() => {
+    if (onboardingComplete !== true) {
+      return;
+    }
     if (startupDatabaseSyncRan.current) {
       return;
     }
@@ -218,7 +269,7 @@ export default function App() {
           description: error instanceof Error ? error.message : "The database registry could not be checked."
         });
       });
-  }, []);
+  }, [onboardingComplete]);
 
   async function removeMissingDatabaseReferences() {
     await removeDatabaseReferences(missingDatabaseReferences.map((status) => status.entry));
@@ -239,8 +290,8 @@ export default function App() {
       return;
     }
     completeFocusTimer();
-    playFocusCompleteAlert(focusSoundMode);
-  }, [completeFocusTimer, focusEndsAt, focusSoundMode, trayTick]);
+    playFocusCompleteAlert(focusSound, focusVibration);
+  }, [completeFocusTimer, focusEndsAt, focusSound, focusVibration, trayTick]);
 
   useEffect(() => {
     return getPlatformApi().onTrayAction((action) => {
@@ -300,6 +351,22 @@ export default function App() {
       }
     });
   }, [conflict, dismissConflict, reloadFromDiskVersion]);
+
+  if (onboardingComplete === null) {
+    return <div className="min-h-screen bg-[var(--app-shell-background)]" />;
+  }
+
+  if (!onboardingComplete) {
+    return (
+      <>
+        <OnboardingPage onComplete={() => {
+          setOnboardingComplete(true);
+          navigate("/track", { replace: true });
+        }} />
+        <Toaster richColors closeButton position="top-right" />
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[var(--app-shell-background)]">

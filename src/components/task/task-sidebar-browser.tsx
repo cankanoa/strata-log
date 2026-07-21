@@ -179,6 +179,10 @@ export function FileSidebarBrowser() {
     });
   }
 
+  if (!hasFiles) {
+    return null;
+  }
+
   return (
     <div className="flex w-full flex-col gap-2">
       <div
@@ -202,24 +206,20 @@ export function FileSidebarBrowser() {
         <span className="min-w-0 flex-1 text-sm font-medium">
           Files
         </span>
-        {hasFiles ? (
-          <Button
-            type="button"
-            size="icon"
-            variant={location.pathname === "/files" ? "secondary" : "ghost"}
-            className="shrink-0"
-            onClick={(event) => {
-              event.stopPropagation();
-              setExpanded((current) => !current);
-            }}
-          >
-            {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-          </Button>
-        ) : (
-          <span className="size-8 shrink-0" aria-hidden />
-        )}
+        <Button
+          type="button"
+          size="icon"
+          variant={location.pathname === "/files" ? "secondary" : "ghost"}
+          className="shrink-0"
+          onClick={(event) => {
+            event.stopPropagation();
+            setExpanded((current) => !current);
+          }}
+        >
+          {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+        </Button>
       </div>
-      {expanded && hasFiles ? (
+      {expanded ? (
         <div className="flex flex-col">
           {nodes.map((node) => (
             <FileTreeNode

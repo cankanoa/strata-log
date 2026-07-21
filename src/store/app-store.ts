@@ -53,9 +53,11 @@ import { parseTimeLogYaml, serializeTimeLogYaml } from "@/lib/yaml";
 import { validateFile, validateMetadataPayload } from "@/lib/validation";
 import { TimerService } from "@/services/timer-service";
 import { TemplateService } from "@/services/template-service";
+import { replaceSettingsRow, SETTINGS_ROWS, updateSettingsRow } from "@/lib/app-settings";
 
 export type FocusMode = "focus" | "break";
-export type FocusAlertMode = "sound" | "vibrate" | "both";
+export type FocusSound = "none" | "chime" | "bell" | "gentle";
+export type FocusVibration = "none" | "short" | "pulse";
 
 type StoreState = AppSnapshot & {
   errors: string[];
@@ -65,7 +67,8 @@ type StoreState = AppSnapshot & {
   selectedEntryId: string | null;
   trackDraftMetadata: SessionMetadata;
   focusMode: FocusMode;
-  focusSoundMode: FocusAlertMode;
+  focusSound: FocusSound;
+  focusVibration: FocusVibration;
   focusSelectedMinutes: number;
   focusCustomSelected: boolean;
   focusCustomMinutes: string;
@@ -89,7 +92,8 @@ type StoreState = AppSnapshot & {
   setSelectedEntryId: (entryId: string | null) => void;
   setTrackDraftMetadata: (metadata: SessionMetadata) => void;
   setFocusMode: (mode: FocusMode) => void;
-  setFocusSoundMode: (mode: FocusAlertMode) => void;
+  setFocusSound: (sound: FocusSound) => void;
+  setFocusVibration: (vibration: FocusVibration) => void;
   setFocusSelectedMinutes: (minutes: number) => void;
   setFocusCustomMinutes: (minutes: string) => void;
   startFocusTimer: () => void;
@@ -316,7 +320,8 @@ export const useAppStore = create<StoreState>((set, get) => ({
   selectedEntryId: null,
   trackDraftMetadata: {},
   focusMode: "focus",
-  focusSoundMode: "sound",
+  focusSound: "chime",
+  focusVibration: "none",
   focusSelectedMinutes: 15,
   focusCustomSelected: false,
   focusCustomMinutes: "",
@@ -461,6 +466,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
 
   setEntriesView(view) {
     set({ entriesView: view });
+    void updateSettingsRow(SETTINGS_ROWS.trackSessionsSection, { view });
   },
 
   setSort(key) {
@@ -471,10 +477,12 @@ export const useAppStore = create<StoreState>((set, get) => ({
         direction: current.key === key && current.direction === "desc" ? "asc" : "desc"
       }
     });
+    void updateSettingsRow(SETTINGS_ROWS.trackSessionsSection, { sort: get().sort });
   },
 
   setFilters(filters) {
     set({ filters });
+    void updateSettingsRow(SETTINGS_ROWS.trackSessionsSection, { filters });
   },
 
   setSelectedEntryId(selectedEntryId) {
@@ -489,14 +497,28 @@ export const useAppStore = create<StoreState>((set, get) => ({
         ? applyResolvedMetadataDefaults(file, normalizeMetadata(fields, trackDraftMetadata))
         : trackDraftMetadata
     });
+    void updateSettingsRow(SETTINGS_ROWS.trackSessionsSection, { metadata: get().trackDraftMetadata });
   },
 
   setFocusMode(focusMode) {
     set({ focusMode });
+    void replaceSettingsRow(SETTINGS_ROWS.focusMode, { mode: focusMode });
   },
 
-  setFocusSoundMode(focusSoundMode) {
-    set({ focusSoundMode });
+  setFocusSound(focusSound) {
+    set({ focusSound });
+    void replaceSettingsRow(SETTINGS_ROWS.completeAlert, {
+      sound: focusSound,
+      vibrate: get().focusVibration
+    });
+  },
+
+  setFocusVibration(focusVibration) {
+    set({ focusVibration });
+    void replaceSettingsRow(SETTINGS_ROWS.completeAlert, {
+      sound: get().focusSound,
+      vibrate: focusVibration
+    });
   },
 
   setFocusSelectedMinutes(focusSelectedMinutes) {
@@ -507,6 +529,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
       focusDurationSeconds: state.focusEndsAt ? state.focusDurationSeconds : focusSelectedMinutes * 60,
       focusCompletedAt: null
     }));
+    void updateSettingsRow(SETTINGS_ROWS.focusTimeAmount, { minutes: focusSelectedMinutes, custom_minutes: undefined });
   },
 
   setFocusCustomMinutes(focusCustomMinutes) {
@@ -519,6 +542,10 @@ export const useAppStore = create<StoreState>((set, get) => ({
         state.focusEndsAt ? state.focusDurationSeconds : Number.isNaN(parsed) || parsed <= 0 ? 0 : parsed * 60,
       focusCompletedAt: null
     }));
+    void updateSettingsRow(SETTINGS_ROWS.focusTimeAmount, {
+      minutes: undefined,
+      custom_minutes: numeric || undefined
+    });
   },
 
   startFocusTimer() {

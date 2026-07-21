@@ -81,6 +81,7 @@
   "build": {
     "appId": "com.stratalog.app",
     "productName": "Strata Log",
+    "icon": "build/icon.png",
     "files": [
       "dist/**/*",
       "dist-electron/**/*",

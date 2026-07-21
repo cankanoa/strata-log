@@ -6,10 +6,16 @@ import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
 
 const presets = [1, 5, 15, 30];
-const alertLabels = {
-  sound: "Sound",
-  vibrate: "Vibrate",
-  both: "Sound + Vibrate"
+const soundLabels = {
+  none: "None",
+  chime: "Chime",
+  bell: "Bell",
+  gentle: "Gentle"
+} as const;
+const vibrationLabels = {
+  none: "None",
+  short: "Short",
+  pulse: "Pulse"
 } as const;
 
 function formatRemaining(totalSeconds: number) {
@@ -21,14 +27,16 @@ function formatRemaining(totalSeconds: number) {
 export function FocusPage() {
   const {
     focusMode,
-    focusSoundMode,
+    focusSound,
+    focusVibration,
     focusSelectedMinutes,
     focusCustomSelected,
     focusCustomMinutes,
     focusDurationSeconds,
     focusEndsAt,
     setFocusMode,
-    setFocusSoundMode,
+    setFocusSound,
+    setFocusVibration,
     setFocusSelectedMinutes,
     setFocusCustomMinutes,
     startFocusTimer,
@@ -37,14 +45,16 @@ export function FocusPage() {
   } = useAppStore(
     useShallow((state) => ({
       focusMode: state.focusMode,
-      focusSoundMode: state.focusSoundMode,
+      focusSound: state.focusSound,
+      focusVibration: state.focusVibration,
       focusSelectedMinutes: state.focusSelectedMinutes,
       focusCustomSelected: state.focusCustomSelected,
       focusCustomMinutes: state.focusCustomMinutes,
       focusDurationSeconds: state.focusDurationSeconds,
       focusEndsAt: state.focusEndsAt,
       setFocusMode: state.setFocusMode,
-      setFocusSoundMode: state.setFocusSoundMode,
+      setFocusSound: state.setFocusSound,
+      setFocusVibration: state.setFocusVibration,
       setFocusSelectedMinutes: state.setFocusSelectedMinutes,
       setFocusCustomMinutes: state.setFocusCustomMinutes,
       startFocusTimer: state.startFocusTimer,
@@ -142,18 +152,34 @@ export function FocusPage() {
             />
           </div>
 
-          <div className="grid gap-2">
-            <label className="text-sm font-medium">Complete Alert</label>
-            <Select value={focusSoundMode} onValueChange={(value) => setFocusSoundMode(value as typeof focusSoundMode)}>
-              <SelectTrigger className="w-full md:w-56">
-                <SelectValue>{alertLabels[focusSoundMode]}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="sound">{alertLabels.sound}</SelectItem>
-                <SelectItem value="vibrate">{alertLabels.vibrate}</SelectItem>
-                <SelectItem value="both">{alertLabels.both}</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">Complete Alert Sound</label>
+              <Select value={focusSound} onValueChange={(value) => value && setFocusSound(value as typeof focusSound)}>
+                <SelectTrigger className="w-full">
+                  <SelectValue>{soundLabels[focusSound]}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">{soundLabels.none}</SelectItem>
+                  <SelectItem value="chime">{soundLabels.chime}</SelectItem>
+                  <SelectItem value="bell">{soundLabels.bell}</SelectItem>
+                  <SelectItem value="gentle">{soundLabels.gentle}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">Vibrate</label>
+              <Select value={focusVibration} onValueChange={(value) => value && setFocusVibration(value as typeof focusVibration)}>
+                <SelectTrigger className="w-full">
+                  <SelectValue>{vibrationLabels[focusVibration]}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">{vibrationLabels.none}</SelectItem>
+                  <SelectItem value="short">{vibrationLabels.short}</SelectItem>
+                  <SelectItem value="pulse">{vibrationLabels.pulse}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <div className="flex gap-2">

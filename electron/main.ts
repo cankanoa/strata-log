@@ -17,6 +17,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appRootPath = app.isPackaged ? process.resourcesPath : process.cwd();
 const registryPath = path.join(appRootPath, "databases.csdb");
 const internalDataPath = path.join(appRootPath, "data");
+const appIconPath = app.isPackaged
+  ? path.join(__dirname, "../dist/taskasaur_icon.png")
+  : path.join(process.cwd(), "public/taskasaur_icon.png");
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -45,6 +48,17 @@ function databaseFileName(name: string): string {
   return `${normalizeInternalDatabaseName(name)}.csdb`;
 }
 
+function isTaskasaurRepositoryUrl(url: string): boolean {
+  try {
+    const target = new URL(url);
+    return target.protocol === "https:"
+      && target.hostname === "github.com"
+      && (target.pathname === "/taskasaur/taskasaur" || target.pathname.startsWith("/taskasaur/taskasaur/"));
+  } catch {
+    return false;
+  }
+}
+
 function renameDatabaseDocument(raw: string, name: string): string {
   const document = parseDocument(raw);
   document.metadata.name = name;
@@ -62,13 +76,7 @@ function sendTrayAction(action: string) {
 
 function updateTray() {
   if (!tray) {
-    const iconSvg = encodeURIComponent(
-      `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
-        <rect x="2" y="2" width="16" height="16" rx="5" fill="#C16032"/>
-        <path d="M7 6h2v8H7zm4 0h2v8h-2z" fill="white"/>
-      </svg>`
-    );
-    tray = new Tray(nativeImage.createFromDataURL(`data:image/svg+xml;charset=utf-8,${iconSvg}`));
+    tray = new Tray(nativeImage.createFromPath(appIconPath).resize({ width: 20, height: 20 }));
   }
 
   if (process.platform === "darwin") {
@@ -121,10 +129,40 @@ function createWindow() {
     minHeight: 760,
     title: "Strata Log",
     backgroundColor: "#f7f2ea",
+    icon: appIconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.mjs"),
       contextIsolation: true,
       nodeIntegration: false
+    }
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isTaskasaurRepositoryUrl(url)) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          width: 1120,
+          height: 780,
+          title: "Taskasaur on GitHub",
+          webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false
+          }
+        }
+      };
+    }
+    if (/^https?:\/\//i.test(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: "deny" };
+  });
+
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    const currentUrl = mainWindow?.webContents.getURL();
+    if (currentUrl && url !== currentUrl && /^https?:\/\//i.test(url)) {
+      event.preventDefault();
+      void shell.openExternal(url);
     }
   });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getActiveDatabaseEntry,
   parseDatabaseRegistry,
+  parseDatabaseRegistrySettings,
   serializeDatabaseRegistry,
   setActiveDatabaseEntry,
   type DatabaseRegistryEntry
@@ -40,5 +41,18 @@ describe("database registry", () => {
     }))));
 
     expect(parsed.map((entry) => Boolean(entry.activeDatabase))).toEqual([true, false]);
+  });
+
+  it("round-trips JSON settings alongside database entries", () => {
+    const raw = serializeDatabaseRegistry(entries, {
+      onboarding_complete: true,
+      display: { density: "compact" }
+    });
+
+    expect(parseDatabaseRegistrySettings(raw)).toEqual({
+      onboarding_complete: true,
+      display: { density: "compact" }
+    });
+    expect(parseDatabaseRegistry(raw)).toHaveLength(2);
   });
 });
