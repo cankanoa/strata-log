@@ -57,5 +57,5 @@ export function MarkdownEditor({ value, className, onChange, onReady }: Markdown
     };
   }, []);
 
-  return <div ref={rootRef} className={cn("strata-markdown-editor min-h-[360px] w-full bg-background", className)} />;
+  return <div ref={rootRef} className={cn("taskasaur-markdown-editor min-h-[360px] w-full bg-background", className)} />;
 }

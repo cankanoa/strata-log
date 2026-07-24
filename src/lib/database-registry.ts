@@ -15,7 +15,7 @@ export type DatabaseRegistrySettings = Record<string, Row[string]>;
 const EMPTY_REGISTRY = `--- csdb
 format: CSDB
 version: 1
-name: strata-log-databases
+name: taskasaur-databases
 tables: []
 `;
 

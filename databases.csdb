@@ -1,7 +1,7 @@
 --- csdb
 format: CSDB
 version: 1
-name: strata-log-databases
+name: taskasaur-databases
 tables:
   - databases
   - settings
@@ -53,5 +53,3 @@ comments: {}
 
 --- table:settings:data
 key,value
-
-

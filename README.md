@@ -36,6 +36,18 @@ npm run cap:sync      # Sync web assets into Capacitor
 npm test              # Run the Vitest suite
 ```
 
+### Releases
+
+Create a release from a clean, fully pushed branch:
+
+```bash
+make release version=1.1.1
+```
+
+The command runs tests and the web build, updates the desktop, Android, and iOS version metadata, commits the version, creates a `v1.1.1` tag, and atomically pushes the commit and tag. The release workflow then builds macOS, Windows, Linux, iOS, and Android artifacts on native GitHub runners and publishes them in a generated GitHub release. GitHub automatically includes source ZIP and tarball downloads.
+
+The mobile artifacts are currently unsigned development distributions. Store or broadly distributed builds require Apple and Android signing credentials.
+
 ## Project Structure
 
 - `src/pages`: Track, Tasks, Focus, Settings, Files, and onboarding screens.

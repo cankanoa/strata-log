@@ -18,8 +18,7 @@ import { SettingsPage } from "@/pages/settings-page";
 import { FilesPage } from "@/pages/files-page";
 import { TasksPage } from "@/pages/task-page";
 import { OnboardingPage } from "@/pages/onboarding-page";
-import { parseDatabaseRegistrySettings } from "@/lib/database-registry";
-import { RESTART_ONBOARDING_EVENT, SETTINGS_ROWS } from "@/lib/app-settings";
+import { loadSettings, RESTART_ONBOARDING_EVENT, SETTINGS_ROWS } from "@/lib/app-settings";
 import { useAppStore } from "@/store/app-store";
 import type { FocusSound, FocusVibration } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
@@ -90,6 +89,7 @@ export default function App() {
   const location = useLocation();
   const {
     file,
+    settingsStatus,
     errors,
     conflict,
     clearErrors,
@@ -102,12 +102,16 @@ export default function App() {
     focusVibration,
     focusDurationSeconds,
     focusEndsAt,
+    focusMode,
+    setFocusSelectedMinutes,
     startFocusTimer,
     pauseFocusTimer,
+    resetFocusTimer,
     completeFocusTimer
   } = useAppStore(
     useShallow((state) => ({
       file: state.file,
+      settingsStatus: state.settingsStatus,
       errors: state.errors,
       conflict: state.conflict,
       clearErrors: state.clearErrors,
@@ -120,8 +124,11 @@ export default function App() {
       focusVibration: state.focusVibration,
       focusDurationSeconds: state.focusDurationSeconds,
       focusEndsAt: state.focusEndsAt,
+      focusMode: state.focusMode,
+      setFocusSelectedMinutes: state.setFocusSelectedMinutes,
       startFocusTimer: state.startFocusTimer,
       pauseFocusTimer: state.pauseFocusTimer,
+      resetFocusTimer: state.resetFocusTimer,
       completeFocusTimer: state.completeFocusTimer
     }))
   );
@@ -210,9 +217,8 @@ export default function App() {
   }, [file, githubSourceKey]);
 
   useEffect(() => {
-    void getPlatformApi().readDatabaseRegistry()
-      .then((raw) => {
-        const settings = parseDatabaseRegistrySettings(raw);
+    void loadSettings()
+      .then((settings) => {
         const track = settings[SETTINGS_ROWS.trackSessionsSection];
         const time = settings[SETTINGS_ROWS.focusTimeAmount];
         const mode = settings[SETTINGS_ROWS.focusMode];
@@ -224,6 +230,7 @@ export default function App() {
         const minutes = typeof timeValue.minutes === "number" && timeValue.minutes > 0 ? timeValue.minutes : undefined;
         const customMinutes = typeof timeValue.custom_minutes === "string" ? timeValue.custom_minutes : undefined;
         useAppStore.setState({
+          settingsStatus: "ready",
           ...(trackValue.view === "list" || trackValue.view === "week" || trackValue.view === "month" ? { entriesView: trackValue.view } : {}),
           ...(Array.isArray(trackValue.filters) ? { filters: trackValue.filters as never } : {}),
           ...(trackValue.sort && typeof trackValue.sort === "object" && !Array.isArray(trackValue.sort) ? { sort: trackValue.sort as never } : {}),
@@ -236,7 +243,10 @@ export default function App() {
         });
         setOnboardingComplete(settings.onboarding_complete === true);
       })
-      .catch(() => setOnboardingComplete(false));
+      .catch(() => {
+        useAppStore.setState({ settingsStatus: "error" });
+        setOnboardingComplete(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -279,11 +289,18 @@ export default function App() {
 
   useEffect(() => {
     void getPlatformApi().updateTrayState({
-      title: runningEntry ? formatDuration(netDurationMs(runningEntry)) : "00:00",
-      isRunning: Boolean(runningEntry),
-      hasBreak: false
+      focus: {
+        title: formatFocusDuration(focusRemainingSeconds),
+        isRunning: Boolean(focusEndsAt),
+        mode: focusMode
+      },
+      track: {
+        title: runningEntry ? formatDuration(netDurationMs(runningEntry)) : "00:00",
+        isRunning: Boolean(runningEntry)
+      },
+      presets: (file?.sessionPresets ?? []).map(({ id, name }) => ({ id, name }))
     });
-  }, [runningEntry, trayTick]);
+  }, [file?.sessionPresets, focusEndsAt, focusMode, focusRemainingSeconds, runningEntry, trayTick]);
 
   useEffect(() => {
     if (!focusEndsAt || Date.now() < focusEndsAt) {
@@ -295,6 +312,12 @@ export default function App() {
 
   useEffect(() => {
     return getPlatformApi().onTrayAction((action) => {
+      if (action === "open-tasks") {
+        navigate("/tasks");
+      }
+      if (action === "open-focus") {
+        navigate("/focus");
+      }
       if (action === "open-timer") {
         navigate("/track");
         window.setTimeout(() => scrollToSection("session-section"), 50);
@@ -310,8 +333,31 @@ export default function App() {
       if (action === "open-task") {
         navigate("/files");
       }
+      if (action.startsWith("focus-start:")) {
+        const minutes = Number.parseInt(action.slice("focus-start:".length), 10);
+        if (Number.isFinite(minutes) && minutes > 0) {
+          setFocusSelectedMinutes(minutes);
+          window.setTimeout(() => useAppStore.getState().startFocusTimer(), 0);
+        }
+      }
+      if (action === "focus-pause") {
+        pauseFocusTimer();
+      }
+      if (action === "focus-reset") {
+        resetFocusTimer();
+      }
+      if (action === "track-stop") {
+        void stopLiveEntry();
+      }
+      if (action.startsWith("track-preset:")) {
+        const presetId = action.slice("track-preset:".length);
+        const preset = useAppStore.getState().file?.sessionPresets.find((candidate) => candidate.id === presetId);
+        if (preset) {
+          void startLiveEntry(preset.metadata ?? {});
+        }
+      }
     });
-  }, [navigate]);
+  }, [navigate, pauseFocusTimer, resetFocusTimer, setFocusSelectedMinutes, startLiveEntry, stopLiveEntry]);
 
   useEffect(() => {
     if (errors.length === 0) {
@@ -319,7 +365,7 @@ export default function App() {
     }
 
     errors.forEach((error) => {
-      toast.error("Strata Log", {
+      toast.error("Taskasaur", {
         id: `error:${error}`,
         description: error
       });
@@ -352,7 +398,7 @@ export default function App() {
     });
   }, [conflict, dismissConflict, reloadFromDiskVersion]);
 
-  if (onboardingComplete === null) {
+  if (settingsStatus === "loading" || onboardingComplete === null) {
     return <div className="min-h-screen bg-[var(--app-shell-background)]" />;
   }
 

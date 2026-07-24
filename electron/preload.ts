@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-contextBridge.exposeInMainWorld("strata", {
+contextBridge.exposeInMainWorld("taskasaur", {
   openFile: () => ipcRenderer.invoke("file:open"),
   createFileFromTemplate: (suggestedName: string, raw: string) =>
     ipcRenderer.invoke("file:create-from-template", suggestedName, raw),
@@ -44,6 +44,10 @@ contextBridge.exposeInMainWorld("strata", {
     ipcRenderer.on("tray-action", listener);
     return () => ipcRenderer.off("tray-action", listener);
   },
-  updateTrayState: (payload: { title: string; isRunning: boolean; hasBreak: boolean }) =>
+  updateTrayState: (payload: {
+    focus: { title: string; isRunning: boolean; mode: "focus" | "break" };
+    track: { title: string; isRunning: boolean };
+    presets: Array<{ id: string; name: string }>;
+  }) =>
     ipcRenderer.invoke("tray:update-state", payload)
 });

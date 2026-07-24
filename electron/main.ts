@@ -23,10 +23,12 @@ const appIconPath = app.isPackaged
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let trayDisplayMode: "focus" | "track" = "focus";
+let trayMenuSignature = "";
 let trayState = {
-  title: "00:00",
-  isRunning: false,
-  hasBreak: false
+  focus: { title: "15:00", isRunning: false, mode: "focus" as "focus" | "break" },
+  track: { title: "00:00", isRunning: false },
+  presets: [] as Array<{ id: string; name: string }>
 };
 let isQuitting = false;
 
@@ -65,60 +67,94 @@ function renameDatabaseDocument(raw: string, name: string): string {
   return serializeDocument(document);
 }
 
-function sendTrayAction(action: string) {
+function sendTrayAction(action: string, revealWindow = false) {
   if (mainWindow) {
     mainWindow.webContents.send("tray-action", action);
-    if (!mainWindow.isVisible()) {
+    if (revealWindow && !mainWindow.isVisible()) {
       mainWindow.show();
+      mainWindow.focus();
     }
   }
 }
 
 function updateTray() {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
   if (!tray) {
-    tray = new Tray(nativeImage.createFromPath(appIconPath).resize({ width: 20, height: 20 }));
+    tray = new Tray(nativeImage.createEmpty());
+    tray.on("click", () => tray?.popUpContextMenu());
   }
 
-  if (process.platform === "darwin") {
-    tray.setTitle(trayState.title);
-  }
+  const displayedTimer = trayDisplayMode === "focus" ? trayState.focus : trayState.track;
+  tray.setTitle(displayedTimer.title);
+  tray.setToolTip(`${trayDisplayMode === "focus" ? "Focus" : "Track"}: ${displayedTimer.title}`);
 
-  tray.setToolTip(
-    trayState.isRunning
-      ? `${trayState.title}${trayState.hasBreak ? " · Break" : ""}`
-      : "Strata Log"
-  );
+  const nextSignature = JSON.stringify({
+    trayDisplayMode,
+    focusRunning: trayState.focus.isRunning,
+    focusMode: trayState.focus.mode,
+    trackRunning: trayState.track.isRunning,
+    presets: trayState.presets
+  });
+  if (nextSignature === trayMenuSignature) {
+    return;
+  }
+  trayMenuSignature = nextSignature;
 
   const menu = Menu.buildFromTemplate([
     {
-      label: trayState.isRunning ? `Running ${trayState.title}` : "No active session",
+      label: trayState.focus.isRunning
+        ? `${trayState.focus.mode === "break" ? "Break" : "Focus"} timer running`
+        : "Focus timer ready",
       enabled: false
     },
     {
-      label: "Open Timer",
-      click: () => sendTrayAction("open-timer")
+      label: "Start Focus",
+      submenu: [1, 5, 15, 25, 30, 45, 60].map((minutes) => ({
+        label: `${minutes} minute${minutes === 1 ? "" : "s"}`,
+        click: () => sendTrayAction(`focus-start:${minutes}`)
+      }))
     },
+    ...(trayState.focus.isRunning ? [{ label: "Pause Focus", click: () => sendTrayAction("focus-pause") }] : []),
+    { label: "Reset Focus", click: () => sendTrayAction("focus-reset") },
+    { type: "separator" as const },
     {
-      label: "Open Entries",
-      click: () => sendTrayAction("open-entries")
+      label: "Start Track Preset",
+      submenu: trayState.presets.length > 0
+        ? trayState.presets.map((preset) => ({
+            label: preset.name,
+            click: () => sendTrayAction(`track-preset:${preset.id}`)
+          }))
+        : [{ label: "No presets configured", enabled: false }]
     },
+    ...(trayState.track.isRunning ? [{ label: "Stop Tracking", click: () => sendTrayAction("track-stop") }] : []),
+    { type: "separator" as const },
     {
-      label: "Open Fields",
-      click: () => sendTrayAction("open-fields")
+      label: "Show Timer in Menu Bar",
+      submenu: (["focus", "track"] as const).map((mode) => ({
+        label: mode === "focus" ? "Focus" : "Track",
+        type: "radio" as const,
+        checked: trayDisplayMode === mode,
+        click: () => {
+          trayDisplayMode = mode;
+          trayMenuSignature = "";
+          updateTray();
+        }
+      }))
     },
     { type: "separator" },
+    { label: "Open Focus", click: () => sendTrayAction("open-focus", true) },
+    { label: "Open Track", click: () => sendTrayAction("open-timer", true) },
+    { label: "Open Tasks", click: () => sendTrayAction("open-tasks", true) },
+    { type: "separator" },
     {
-      label: "Quit",
+      label: "Quit Taskasaur",
       click: () => app.quit()
     }
   ]);
   tray.setContextMenu(menu);
-  tray.on("click", () => {
-    if (mainWindow) {
-      mainWindow.show();
-      mainWindow.focus();
-    }
-  });
 }
 
 function createWindow() {
@@ -127,7 +163,7 @@ function createWindow() {
     height: 940,
     minWidth: 1100,
     minHeight: 760,
-    title: "Strata Log",
+    title: "Taskasaur",
     backgroundColor: "#f7f2ea",
     icon: appIconPath,
     webPreferences: {
@@ -254,7 +290,7 @@ ipcMain.handle("database-registry:save", async (_, raw: string) => {
 
 ipcMain.handle("database-file:choose-url", async (_, suggestedName: string) => {
   const result = await dialog.showSaveDialog({
-    defaultPath: `${suggestedName.trim() || "strata-log"}.csdb`,
+    defaultPath: `${suggestedName.trim() || "taskasaur"}.csdb`,
     filters: [{ name: "CSDB", extensions: ["csdb"] }]
   });
   return result.canceled || !result.filePath ? null : result.filePath;

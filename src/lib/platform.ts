@@ -44,15 +44,15 @@ export type NativeApi = {
   watchFile: (path: string, callback: WatchCallback) => Promise<() => void>;
   onTrayAction: (callback: (action: string) => void) => () => void;
   updateTrayState: (payload: {
-    title: string;
-    isRunning: boolean;
-    hasBreak: boolean;
+    focus: { title: string; isRunning: boolean; mode: "focus" | "break" };
+    track: { title: string; isRunning: boolean };
+    presets: Array<{ id: string; name: string }>;
   }) => Promise<void>;
 };
 
 declare global {
   interface Window {
-    strata?: NativeApi;
+    taskasaur?: NativeApi;
   }
 }
 
@@ -83,15 +83,15 @@ function internalDatabasePath(name: string): string {
 }
 
 export function getPlatformApi(): NativeApi {
-  if (window.strata) {
-    return window.strata;
+  if (window.taskasaur) {
+    return window.taskasaur;
   }
 
   return {
     async openFile() {
-      const raw = memoryStore.get("strata-log-demo.csdb") ?? serializeTimeLogYaml(defaultTimeLogFile);
+      const raw = memoryStore.get("taskasaur-demo.csdb") ?? serializeTimeLogYaml(defaultTimeLogFile);
       return {
-        handle: { path: "strata-log-demo.csdb", name: "strata-log-demo.csdb" },
+        handle: { path: "taskasaur-demo.csdb", name: "taskasaur-demo.csdb" },
         raw
       };
     },
@@ -111,7 +111,7 @@ export function getPlatformApi(): NativeApi {
       memoryStore.set("databases.csdb", raw);
     },
     async chooseDatabaseUrl(suggestedName) {
-      const value = window.prompt("Database URL", `${suggestedName || "strata-log"}.csdb`) ?? "";
+      const value = window.prompt("Database URL", `${suggestedName || "taskasaur"}.csdb`) ?? "";
       return value.trim().length > 0 ? value.trim() : null;
     },
     async getDatabaseFileInfo({ location, url }) {

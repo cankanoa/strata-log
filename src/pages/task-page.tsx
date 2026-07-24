@@ -44,7 +44,7 @@ import { extractMarkdownFieldsFromData } from "@/lib/markdown-task-identity";
 import type { ActiveTaskReference, FieldDefinition, MetadataValue, TaskDisplayRow, TaskFieldMetadata, TaskSource } from "@/lib/types";
 import { useAppStore } from "@/store/app-store";
 import { useShallow } from "zustand/react/shallow";
-import { getSettingsRow, replaceSettingsRow, SETTINGS_ROWS } from "@/lib/app-settings";
+import { getCachedSettingsRow, replaceSettingsRow, SETTINGS_ROWS } from "@/lib/app-settings";
 
 type TaskTreeRow = {
   task: TaskDisplayRow;
@@ -1242,13 +1242,33 @@ export function TasksPage() {
     () => new Set((file?.activeTasks ?? []).map(taskReferenceKey)),
     [file?.activeTasks]
   );
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
-  const [view, setView] = useState<TaskViewMode>("small-table");
-  const [columnState, setColumnState] = useState<ColumnState[]>([]);
-  const [filters, setFilters] = useState<FilterState[]>([]);
-  const [sorts, setSorts] = useState<SortState[]>([]);
-  const [groupColumnId, setGroupColumnId] = useState<string | null>(null);
-  const [createUnsetGroup, setCreateUnsetGroup] = useState(false);
+  const initialTableRow = getCachedSettingsRow(SETTINGS_ROWS.tasksTableRow);
+  const initialViewRow = getCachedSettingsRow(SETTINGS_ROWS.tasksViewSelection);
+  const initialGroupRow = getCachedSettingsRow(SETTINGS_ROWS.tasksGroup);
+  const initialFieldsRow = getCachedSettingsRow(SETTINGS_ROWS.tasksFields);
+  const initialFilterRow = getCachedSettingsRow(SETTINGS_ROWS.tasksFilter);
+  const initialSortRow = getCachedSettingsRow(SETTINGS_ROWS.tasksSort);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() =>
+    new Set(Array.isArray(initialTableRow.expanded_ids) ? initialTableRow.expanded_ids.map(String) : [])
+  );
+  const [view, setView] = useState<TaskViewMode>(() =>
+    ["small-table", "large-table", "small-kanban", "large-kanban"].includes(String(initialViewRow.view))
+      ? initialViewRow.view as TaskViewMode
+      : "small-table"
+  );
+  const [columnState, setColumnState] = useState<ColumnState[]>(() =>
+    Array.isArray(initialFieldsRow.columns) ? initialFieldsRow.columns as ColumnState[] : []
+  );
+  const [filters, setFilters] = useState<FilterState[]>(() =>
+    Array.isArray(initialFilterRow.filters) ? initialFilterRow.filters as FilterState[] : []
+  );
+  const [sorts, setSorts] = useState<SortState[]>(() =>
+    Array.isArray(initialSortRow.sorts) ? initialSortRow.sorts as SortState[] : []
+  );
+  const [groupColumnId, setGroupColumnId] = useState<string | null>(() =>
+    typeof initialGroupRow.column_id === "string" ? initialGroupRow.column_id : null
+  );
+  const [createUnsetGroup, setCreateUnsetGroup] = useState(initialGroupRow.create_unset_group === true);
   const [newTaskChoiceId, setNewTaskChoiceId] = useState("");
   const [newTaskValues, setNewTaskValues] = useState<Record<string, MetadataValue>>({ status: true });
   const [newTaskActive, setNewTaskActive] = useState(false);
@@ -1257,32 +1277,12 @@ export function TasksPage() {
   const [updatingStatusTaskId, setUpdatingStatusTaskId] = useState<string | null>(null);
   const [syncingSources, setSyncingSources] = useState(false);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
-  const [settingsHydrated, setSettingsHydrated] = useState(false);
+  const settingsHydrated = true;
   const [editField, setEditField] = useState<{
     task: TaskDisplayRow;
     field: TaskFieldMetadata;
     value: MetadataValue;
   } | null>(null);
-
-  useEffect(() => {
-    void Promise.all([
-      getSettingsRow(SETTINGS_ROWS.tasksTableRow),
-      getSettingsRow(SETTINGS_ROWS.tasksViewSelection),
-      getSettingsRow(SETTINGS_ROWS.tasksGroup),
-      getSettingsRow(SETTINGS_ROWS.tasksFields),
-      getSettingsRow(SETTINGS_ROWS.tasksFilter),
-      getSettingsRow(SETTINGS_ROWS.tasksSort)
-    ]).then(([tableRow, viewRow, groupRow, fieldsRow, filterRow, sortRow]) => {
-      if (Array.isArray(tableRow.expanded_ids)) setExpandedIds(new Set(tableRow.expanded_ids.map(String)));
-      if (["small-table", "large-table", "small-kanban", "large-kanban"].includes(String(viewRow.view))) setView(viewRow.view as TaskViewMode);
-      if (typeof groupRow.column_id === "string") setGroupColumnId(groupRow.column_id);
-      if (groupRow.create_unset_group === true) setCreateUnsetGroup(true);
-      if (Array.isArray(fieldsRow.columns)) setColumnState(fieldsRow.columns as ColumnState[]);
-      if (Array.isArray(filterRow.filters)) setFilters(filterRow.filters as FilterState[]);
-      if (Array.isArray(sortRow.sorts)) setSorts(sortRow.sorts as SortState[]);
-      setSettingsHydrated(true);
-    });
-  }, []);
 
   useEffect(() => { if (settingsHydrated) void replaceSettingsRow(SETTINGS_ROWS.tasksTableRow, expandedIds.size ? { expanded_ids: [...expandedIds] } : undefined); }, [expandedIds, settingsHydrated]);
   useEffect(() => { if (settingsHydrated) void replaceSettingsRow(SETTINGS_ROWS.tasksViewSelection, view === "small-table" ? undefined : { view }); }, [settingsHydrated, view]);

@@ -71,20 +71,38 @@ export function SettingsPage() {
         <SettingsHeading>Information</SettingsHeading>
         <Card className="border-white/60 bg-card/90 shadow-xl shadow-amber-950/5">
           <CardHeader>
-            <CardTitle>Taskasaur</CardTitle>
+            <CardTitle>Open Source Project</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="grid gap-1 text-sm">
+          <CardContent className="grid gap-2">
+            <p className="text-sm text-muted-foreground">
+              Source code, releases, and project information is available here:{" "}
               <a
                 href="https://github.com/taskasaur/taskasaur"
                 target="_blank"
                 rel="noreferrer"
-                className="font-medium underline underline-offset-4 hover:text-muted-foreground"
+                className="font-medium text-foreground underline underline-offset-4 hover:text-muted-foreground"
               >
                 taskasaur/taskasaur
-              </a>
-              <p className="text-muted-foreground">Source code, releases, and project information.</p>
-            </div>
+              </a>.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              The homepage of the site is available here:{" "}
+              <a
+                href="https://taskasaur.net"
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-foreground underline underline-offset-4 hover:text-muted-foreground"
+              >
+                taskasaur.net
+              </a>.
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="border-white/60 bg-card/90 shadow-xl shadow-amber-950/5">
+          <CardHeader>
+            <CardTitle>Onboarding</CardTitle>
+          </CardHeader>
+          <CardContent>
             <Button type="button" variant="outline" onClick={() => void restartOnboarding()}>
               Restart Onboarding
             </Button>

@@ -28,7 +28,7 @@ import { validateFile } from "@/lib/validation";
 const EMPTY_DATABASE = `--- csdb
 format: CSDB
 version: 1
-name: strata-log
+name: taskasaur
 tables: []
 `;
 

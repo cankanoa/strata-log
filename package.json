@@ -1,8 +1,12 @@
 {
-  "name": "strata-log",
+  "name": "taskasaur",
   "version": "0.1.0",
   "description": "CSDB-backed cross-platform time tracking app built with React, Electron, and Capacitor.",
-  "author": "OpenAI Codex",
+  "author": {
+    "name": "Taskasaur Contributors",
+    "email": "taskasaur@users.noreply.github.com"
+  },
+  "homepage": "https://taskasaur.net",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.js",
@@ -10,16 +14,27 @@
     "dev": "vite",
     "build": "tsc -b && vite build && electron-builder",
     "build:web": "tsc -b && vite build",
+    "build:macos": "npm run build:web && electron-builder --mac dmg zip --arm64",
+    "build:windows": "npm run build:web && electron-builder --win nsis --x64",
+    "build:linux": "npm run build:web && electron-builder --linux AppImage deb --x64",
+    "prepare:ios": "npm run build:web && cap sync ios",
+    "prepare:android": "npm run build:web && cap sync android",
+    "build:ios": "npm run prepare:ios && xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release -destination generic/platform=iOS -derivedDataPath release/ios CODE_SIGNING_ALLOWED=NO",
+    "build:android": "npm run prepare:android && cd android && ./gradlew assembleRelease",
     "preview": "vite preview",
     "electron:dev": "vite dev",
     "test": "vitest run",
     "test:watch": "vitest",
     "package:dir": "tsc -b && vite build && electron-builder --dir",
-    "cap:sync": "npx cap sync",
-    "cap:open:ios": "npx cap open ios"
+    "cap:sync": "cap sync",
+    "cap:sync:ios": "cap sync ios",
+    "cap:sync:android": "cap sync android",
+    "cap:open:ios": "cap open ios",
+    "cap:open:android": "cap open android"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
+    "@capacitor/android": "^7.6.8",
     "@capacitor/core": "^7.1.0",
     "@capacitor/ios": "^7.1.0",
     "@csdb/javascript": "file:../csvdatabase/csdb-javascript",
@@ -56,6 +71,7 @@
     "zustand": "^5.0.5"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^7.1.0",
     "@tailwindcss/vite": "^4.3.0",
     "@testing-library/jest-dom": "^6.6.3",
@@ -79,8 +95,8 @@
     "vitest": "^3.2.3"
   },
   "build": {
-    "appId": "com.stratalog.app",
-    "productName": "Strata Log",
+    "appId": "com.taskasaur.app",
+    "productName": "Taskasaur",
     "icon": "build/icon.png",
     "files": [
       "dist/**/*",
@@ -101,13 +117,26 @@
       }
     ],
     "directories": {
-      "buildResources": "build"
+      "buildResources": "build",
+      "output": "release"
     },
     "mac": {
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "win": {
       "target": "nsis"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office"
     }
   }
 }

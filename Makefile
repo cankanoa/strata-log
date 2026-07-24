@@ -1,6 +1,8 @@
 SHELL := /bin/zsh
 
-.PHONY: help install test clean build-web build-electron build-macos build-windows build-ios sync-ios open-ios
+.PHONY: help install test clean build-web build-electron build-macos build-windows \
+	build-linux build-ios build-android sync-ios sync-android open-ios open-android \
+	build-all release
 
 help:
 	@echo "Available targets:"
@@ -9,11 +11,18 @@ help:
 	@echo "  make clean           Remove generated build output"
 	@echo "  make build-web       Build the shared React app and Electron bundles"
 	@echo "  make build-electron  Build the shared React app and Electron bundles"
-	@echo "  make build-macos     Package the Electron app for macOS"
-	@echo "  make build-windows   Package the Electron app for Windows"
+	@echo "  make build-macos     Package macOS DMG and ZIP files"
+	@echo "  make build-windows   Package a Windows NSIS installer"
+	@echo "  make build-linux     Package Linux AppImage and DEB files"
+	@echo "  make build-all       Build macOS, Windows, Linux, iOS, and Android"
+	@echo "  make release version=1.1.1"
+	@echo "                       Tag a version and publish native builds with GitHub Actions"
 	@echo "  make sync-ios        Sync the web build into the Capacitor iOS shell"
+	@echo "  make sync-android    Sync the web build into the Capacitor Android shell"
 	@echo "  make open-ios        Open the iOS project in Xcode"
-	@echo "  make build-ios       Build the web app and sync it into the Capacitor iOS shell"
+	@echo "  make open-android    Open the Android project in Android Studio"
+	@echo "  make build-ios       Compile an unsigned release iOS app"
+	@echo "  make build-android   Compile an unsigned release Android APK"
 
 install:
 	npm install
@@ -22,7 +31,7 @@ test:
 	npm test
 
 clean:
-	rm -rf dist dist-electron
+	rm -rf dist dist-electron release
 
 build-web:
 	npm run build:web
@@ -31,21 +40,33 @@ build-electron:
 	npm run build:web
 
 build-macos:
-	npx tsc -b
-	npx vite build
-	npx electron-builder --mac
+	npm run build:macos
 
 build-windows:
-	npx tsc -b
-	npx vite build
-	npx electron-builder --win
+	npm run build:windows
+
+build-linux:
+	npm run build:linux
+
+build-all: build-macos build-windows build-linux build-ios build-android
+
+release:
+	@node scripts/release.mjs "$(version)"
 
 sync-ios:
-	npm run cap:sync
+	npm run prepare:ios
+
+sync-android:
+	npm run prepare:android
 
 open-ios:
 	npm run cap:open:ios
 
+open-android:
+	npm run cap:open:android
+
 build-ios:
-	npm run build:web
-	npm run cap:sync
+	npm run build:ios
+
+build-android:
+	npm run build:android

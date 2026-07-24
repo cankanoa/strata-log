@@ -1,6 +1,14 @@
 node_modules/
 dist/
 dist-electron/
+release/
+.codex-tmp/
+@/
+electron/*.js
+electron/*.d.ts
+android/.gradle/
+android/app/build/
+ios/App/DerivedData/
 data/
 *.tsbuildinfo
 capacitor.config.js

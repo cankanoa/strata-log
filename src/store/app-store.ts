@@ -60,6 +60,7 @@ export type FocusSound = "none" | "chime" | "bell" | "gentle";
 export type FocusVibration = "none" | "short" | "pulse";
 
 type StoreState = AppSnapshot & {
+  settingsStatus: "loading" | "ready" | "error";
   errors: string[];
   entriesView: "list" | "week" | "month";
   sort: EntrySort;
@@ -309,6 +310,7 @@ async function reloadTaskSource(file: TimeLogFile, source: TaskSource, handlePat
 }
 
 export const useAppStore = create<StoreState>((set, get) => ({
+  settingsStatus: "loading",
   file: null,
   fileHandle: null,
   hasUnsavedChanges: false,
@@ -426,7 +428,7 @@ export const useAppStore = create<StoreState>((set, get) => ({
       return;
     }
     const raw = serializeTimeLogYaml(template.content);
-    const response = await getPlatformApi().createFileFromTemplate(`strata-log-${templateId}`, raw);
+    const response = await getPlatformApi().createFileFromTemplate(`taskasaur-${templateId}`, raw);
     if (!response) {
       return;
     }

@@ -98,11 +98,11 @@
   --crepe-color-inline-area: #2b2b2b;
 }
 
-.strata-markdown-editor .milkdown {
+.taskasaur-markdown-editor .milkdown {
   min-height: 100%;
 }
 
-.strata-markdown-editor .milkdown .ProseMirror {
+.taskasaur-markdown-editor .milkdown .ProseMirror {
   min-height: 100%;
 }
 

@@ -1,0 +1,152 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build (for example, v1.1.1)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  desktop:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            runner: macos-14
+            command: make build-macos
+            artifact: |
+              release/*.dmg
+              release/*.zip
+          - name: Windows
+            runner: windows-2022
+            command: npm run build:windows
+            artifact: release/*.exe
+          - name: Linux
+            runner: ubuntu-24.04
+            command: make build-linux
+            artifact: |
+              release/*.AppImage
+              release/*.deb
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out Taskasaur
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Check out CSDB dependency
+        shell: bash
+        run: git clone --depth 1 https://github.com/csvdatabase/csdb-javascript.git ../csvdatabase/csdb-javascript
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build ${{ matrix.name }}
+        run: ${{ matrix.command }}
+      - name: Collect ${{ matrix.name }} artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: taskasaur-${{ matrix.name }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+  ios:
+    name: iOS
+    runs-on: macos-14
+    steps:
+      - name: Check out Taskasaur
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Check out CSDB dependency
+        run: git clone --depth 1 https://github.com/csvdatabase/csdb-javascript.git ../csvdatabase/csdb-javascript
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build unsigned iOS app
+        run: make build-ios
+      - name: Archive iOS app
+        run: ditto -c -k --sequesterRsrc --keepParent release/ios/Build/Products/Release-iphoneos/App.app "release/Taskasaur-${RELEASE_TAG}-ios-unsigned.zip"
+      - name: Collect iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: taskasaur-iOS
+          path: release/*-ios-unsigned.zip
+          if-no-files-found: error
+
+  android:
+    name: Android
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out Taskasaur
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Check out CSDB dependency
+        run: git clone --depth 1 https://github.com/csvdatabase/csdb-javascript.git ../csvdatabase/csdb-javascript
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - name: Install dependencies
+        run: npm ci
+      - name: Build unsigned Android APK
+        run: make build-android
+      - name: Name Android artifact
+        run: |
+          mkdir -p release
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk "release/Taskasaur-${RELEASE_TAG}-android-unsigned.apk"
+      - name: Collect Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: taskasaur-Android
+          path: release/*-android-unsigned.apk
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs:
+      - desktop
+      - ios
+      - android
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Download native builds
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$RELEASE_TAG" artifacts/* --verify-tag --generate-notes --title "Taskasaur ${RELEASE_TAG#v}"

@@ -113,7 +113,10 @@ export function SessionSection() {
       return;
     }
     if (file) {
-      setTrackDraftMetadata(emptyMetadata(file.fields));
+      setTrackDraftMetadata({
+        ...emptyMetadata(file.fields),
+        ...trackDraftMetadata
+      });
       return;
     }
     setTrackDraftMetadata({});

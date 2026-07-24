@@ -664,7 +664,7 @@ export function DatabaseSection({ sections = ["sources", "track"] }: { sections?
   }
 
   async function chooseExternalDatabaseUrl() {
-    const url = await getPlatformApi().chooseDatabaseUrl(databaseDraftUrl || "strata-log");
+    const url = await getPlatformApi().chooseDatabaseUrl(databaseDraftUrl || "taskasaur");
     if (url) {
       setDatabaseDraftUrl(url);
     }

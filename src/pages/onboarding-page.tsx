@@ -13,6 +13,7 @@ import {
   setActiveDatabaseEntry,
   type DatabaseLocation
 } from "@/lib/database-registry";
+import { hydrateSettingsCache } from "@/lib/app-settings";
 import { getPlatformApi } from "@/lib/platform";
 import { serializeTimeLogYaml } from "@/lib/yaml";
 import { TEMPLATE_OPTIONS, TemplateService } from "@/services/template-service";
@@ -64,9 +65,9 @@ export function OnboardingPage({ onComplete }: { onComplete: () => void }) {
     const entries = raw.trim() ? parseDatabaseRegistry(raw) : [];
     const settings = { ...parseDatabaseRegistrySettings(raw), onboarding_complete: true };
     const combined = extraEntries ? [...entries, ...extraEntries] : entries;
-    await getPlatformApi().saveDatabaseRegistry(
-      serializeDatabaseRegistry(activeId ? setActiveDatabaseEntry(combined, activeId) : combined, settings)
-    );
+    const nextRaw = serializeDatabaseRegistry(activeId ? setActiveDatabaseEntry(combined, activeId) : combined, settings);
+    await getPlatformApi().saveDatabaseRegistry(nextRaw);
+    hydrateSettingsCache(nextRaw);
     onComplete();
   }
 
@@ -135,9 +136,9 @@ export function OnboardingPage({ onComplete }: { onComplete: () => void }) {
             <p className="mt-5 text-lg text-muted-foreground sm:text-xl">{feature.description}</p>
             <div className="mt-10 space-y-3">
               {feature.faqs.map((faq) => (
-                <details key={faq.question} className="group rounded-xl border bg-card px-5 py-4">
-                  <summary className="cursor-pointer list-none font-semibold marker:hidden">{faq.question}</summary>
-                  <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                <details key={faq.question} className="group overflow-hidden rounded-xl border bg-card">
+                  <summary className="block w-full cursor-pointer list-none px-5 py-4 font-semibold marker:hidden">{faq.question}</summary>
+                  <p className="px-5 pb-4 text-sm leading-6 text-muted-foreground">
                     {faq.answer}
                     {"link" in faq ? (
                       <> <a href={faq.link.href} target="_blank" rel="noreferrer" className="font-medium text-foreground underline underline-offset-4">{faq.link.label}</a>.</>
